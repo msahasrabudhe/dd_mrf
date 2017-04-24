@@ -19,6 +19,9 @@ import bp
 # The dtype to use to store energies. 
 e_dtype = np.float64
 
+# List of slave types handled by this module. 
+handled_slave_types = ['cell', 'tree', 'cycle']
+
 class Slave:
 	'''
 	A class to store a slave. An instance of this class stores
@@ -32,7 +35,7 @@ class Slave:
 		Slave.__init__(): Initialise parameters for this slave, if given. 
 		                  Parameters are None by default. 
 		'''
-		if struct not in ['cell', 'tree']:
+		if struct not in handled_slave_types:
 			print 'Slave struct not recognised: %s.' %(struct)
 			raise ValueError
 
@@ -50,7 +53,7 @@ class Slave:
 		Slave.set_params(): Set parameters for this slave.
 							Parameters must be specified.
 		'''
-		if struct not in ['cell', 'tree']:
+		if struct not in handled_slave_types:
 			print 'Slave struct not recognised: %s.' %(struct)
 			raise ValueError
 
@@ -123,6 +126,8 @@ class Slave:
 			self._energy	= _compute_4node_slave_energy(self.node_energies, self.edge_energies, self.labels)
 		elif self.struct == 'tree':
 			self._energy	= _compute_tree_slave_energy(self.node_energies, self.edge_energies, self.labels, self.graph_struct)
+		elif self.struct == 'cycle':
+			self._energy    = _compute_cycle_slave_energy(self.node_energies, self.edge_energies, self.labels)
 		else:
 			print 'Slave struct not recognised: %s.' %(self.struct)
 			raise ValueError
@@ -476,7 +481,7 @@ class Graph:
 		Takes as input a_start, which is a float and denotes the starting value of \\alpha_t in
 		the DD-MRF algorithm. 
 
-		struct specifies the type of decomposition to use. struct must be in ['cell', 'row_col']. 
+		struct specifies the type of decomposition to use. struct must be in handled_slave_types. 
 		'cell' specifies a decomposition in which the lattice in broken into 2x2 cells - each 
 		being a slave. 'row_col' specifies a decomposition in which the lattice is broken into
 		rows and columns - each being a slave. 
@@ -1235,6 +1240,30 @@ def _compute_tree_slave_energy(node_energies, edge_energies, labels, graph_struc
 	for edge in range(graph_struct['edge_ends'].shape[0]):
 		e0, e1 = graph_struct['edge_ends'][edge]
 		energy += edge_energies[edge][labels[e0]][labels[e1]]
+
+	return energy
+# ---------------------------------------------------------------------------------------
+
+
+def _compute_cycle_slave_energy(node_energies, edge_energies, labels):
+	'''
+	Compute the energy of a cycle. It is assumed that the edges are ordered as 
+	    x1 - x2
+	    x2 - x3
+	    ...
+	    xN - x1
+	where N is the total number of nodes in the cycle. 	
+	'''
+	energy = 0
+	n_nodes = node_energies.shape[0]
+
+	for i in range(n_nodes):
+		energy += node_energies[i, labels[i]]
+
+	for e in range(n_nodes):
+		end0 = e
+		end1 = (e+1)%n_nodes
+		energy += edge_energies[e, labels[end0], labels[end1]]
 
 	return energy
 # ---------------------------------------------------------------------------------------
