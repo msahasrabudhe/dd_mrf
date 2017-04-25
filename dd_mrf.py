@@ -20,7 +20,7 @@ import bp
 e_dtype = np.float64
 
 # List of slave types handled by this module. 
-handled_slave_types = ['cell', 'tree', 'cycle']
+handled_slave_types = ['cell', 'tree', 'mixed']
 
 class Slave:
 	'''
@@ -113,6 +113,8 @@ class Slave:
 			return _optimise_4node_slave(self)
 		elif self.struct == 'tree':
 			return _optimise_tree(self)
+		elif self.struct == 'cycle':
+			return _optimise_cycle(self)
 		else:
 			print 'Slave struct not recognised: %s.' %(self.struct)
 			raise ValueError
@@ -1529,5 +1531,71 @@ def _generate_tree_with_root(_in):
 	# Return this adjcency matrix. 
 	return _sliced, node_list, edge_list
 
+# ---------------------------------------------------------------------------------------
 
 
+def find_cycle_in_graph(adj, root):
+	# Given adjacency matrix adj, and an arbitrary vertex a root, 
+	#    return a cycle in the graph containing root. 
+
+	# The number of nodes in the graph
+	n_nodes = adj.shape[0]
+
+	# Initialise queue. 
+	queue = [root]
+
+	# No longest path initially. 
+	longest_path = []
+
+	# The list of shortest paths to a given node from root. 
+	shortest_paths       = [[] for i in range(n_nodes)]
+	shortest_paths[root] = [root]
+
+	# Visited array: whether we have already visited a node. 
+	visited    = np.zeros(n_nodes, dtype=np.bool)
+	visited[root] = True
+
+	# BFS:
+	while len(queue) > 0:
+		# The current node that we are analysing ...
+		cur_node = queue[0]
+		# Pop the root. 
+		queue    = queue[1:]
+
+		# Path to current node. 
+		cur_path = shortest_paths[cur_node]
+
+		# Neighbours of current node. 
+		neighs   = np.where(adj[cur_node] == True)[0]
+
+		# Check if neighbours have been visited. 
+		neighs = np.array([_n for _n in neighs if _n not in cur_path])
+
+		if neighs.size == 0:
+			return None
+
+		if np.sum(visited[neighs]) == 0:
+			for n in neighs:
+				shortest_paths[n] = cur_path + [n]
+			# Set visited to True for these neighbours. 
+			visited[neighs] = True
+
+			# Push them into the queue. 
+			queue += np.random.permutation(neighs).tolist()
+		else:
+			# Visited neighbours. 
+			visited_neighs = neighs[np.where(visited[neighs] == True)[0].tolist()]
+
+			# Path lengths for all visited neighbours. 
+			visited_plengths = [len(shortest_paths[v]) + len(cur_path) for v in visited_neighs]
+
+			# Longest path
+			lid          = np.argmax(visited_plengths)
+			longest_path = shortest_paths[visited_neighs[lid]] + cur_path[-1::-1]
+			# No need to continue further. 
+			break
+
+	if longest_path == []:
+		return None
+
+	return longest_path
