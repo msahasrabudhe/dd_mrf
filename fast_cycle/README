@@ -1,0 +1,115 @@
+
+---------------------------------------------------------
+Environment notes
+---------------------------------------------------------
+
+1. Throughly tested under Ubuntu 12.10 (GNU/Linux 3.5.0-45-generic x86_64).
+2. There are noticed numerical issues under Mac OS X Version 10.9.3
+
+---------------------------------------------------------
+Usage
+---------------------------------------------------------
+Compile:
+$ g++ -O3 -fomit-frame-pointer -ffast-math -Wall -Wno-deprecated code/stc.c -o bin/solver
+
+Run inference:
+$ ./bin/solver <input-model-file> <input-evidence-file> <output-file> <time-budget-in-seconds> [options]
+
+For example:
+$ ./bin/solver ./data/1.uai ./data/1.uai.evid ./1.uai.result 3600
+
+You may use an empty file (or a non-existing file) for <input-evidence-file>.
+
+---------------------------------------------------------
+Citations
+---------------------------------------------------------
+
+If you use this software, please cite [1]. If you use it with cycles turned on (default),
+please cite [1] and [2].
+
+[1] Huayan Wang and Daphne Koller: Subproblem-Tree Calibration: A Unified Approach to Max-Product Message Passing, ICML 2013
+[2] Huayan Wang and Daphne Koller: A Fast and Exact Energy Minimization Algorithm for Cycle MRFs, ICML 2013
+
+---------------------------------------------------------
+Options
+---------------------------------------------------------
+
+Currently we only support one option:
+-c 1 : use cycles [default]
+-c 0 : not use cycles
+(append "-c 0" without quotes to the end of the command line)
+
+If the cycles are turned on (default), cycles will be added to tighten 
+the dual decomposition after the dual progress has almost converged. 
+(It usually has no effect if the initial dual decomposition already 
+gives rise to a tight bound.)
+
+---------------------------------------------------------
+Input formats
+---------------------------------------------------------
+
+We support two data formats
+
+1. UAI format
+   This format has been used in a number of competitions including UAI 2014.
+   Explanations can be cound in the following link (or google "UAI format")
+   http://www.hlt.utdallas.edu/~vgogate/uai14-competition/index.html
+   We also suport evidences in the .uai.evid format (also explained in the above link).
+
+2. MAP format 
+   A major limination of the UAI format is that, it does not allow factors to share parametrization.
+   For example, if we have a huge grid MRF (in image applications) where millions of factors share 
+   the same parameterizations (smoothness prior on edges), the UAI format would be result in 
+   an unnecessarily large file. To that end we define a new plain text format for MAP inference 
+   problems (the .map format). This format is explained in detail in MAP_FORMAT.txt.
+
+---------------------------------------------------------
+Output format
+---------------------------------------------------------
+
+The output format is the same as the required output format in the UAI competition
+http://www.hlt.utdallas.edu/~vgogate/uai14-competition/index.html
+Basically it is a space separated line that includes:
+the number n of model variables, and
+the MAP instantiation, a list of value indices for all n variables.
+
+---------------------------------------------------------
+Standard output
+---------------------------------------------------------
+
+While running, our solver also produces standard output in the following format:
+
+"%.2f secs, energy=%f, bound=%f, progress=%f, cycles=%d\n"
+
+it shows:
+(1) the current running time (in seconds)
+(2) the current enery value (objective function that we try to minimize),
+(3) the current lower bound on the energy value, 
+(4) the relative progress in closing the duality gap in the last iteration, 
+(5) and the number of cycle subproblems being used
+
+---------------------------------------------------------
+License
+---------------------------------------------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2014 Huayan Wang
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
