@@ -61,7 +61,7 @@ int *int_npy_1darray_to_Carray(PyArrayObject *arrayin)
 /* Returns a pointer which can be used to access elements of
    a 2D NumPy double array. 
    data[i][j] will return the element at the i,j-th position. */
-double *double_npy_2darray_to_Carray(PyArrayObject *arrayin)
+double **double_npy_2darray_to_Carray(PyArrayObject *arrayin)
 {
 	int m, n;
 	int i;
@@ -88,7 +88,7 @@ double *double_npy_2darray_to_Carray(PyArrayObject *arrayin)
 /* Returns a pointer which can be used to access elements of
    a 2D NumPy int array. 
    data[i][j] will return the element at the i,j-th position. */
-int *int_npy_2darray_to_Carray(PyArrayObject *arrayin)
+int **int_npy_2darray_to_Carray(PyArrayObject *arrayin)
 {
 	int m, n;
 	int i;
@@ -195,9 +195,9 @@ solver(PyObject *self, PyObject *args)
 	PyArrayObject * labels_; 				// The resulting labelling. 
 
 	/* The arrays which will store the unary energies, pairwise energies, and the number of labels. */
-	double *unaries;
-	double *pairwise;
-	double *n_labels;
+	double **unaries;
+	double **pairwise;
+	int *n_labels;
 
 	/* The number of elements in these lists. */
 	int n_unaries;
@@ -217,6 +217,11 @@ solver(PyObject *self, PyObject *args)
 
 	if(unary_ar == NULL || pairwise_ar == NULL || n_labels_ar == NULL)
 		return NULL;
+
+	printf("n_labels: %d\n", n_labels_ar->descr->type_num);
+	printf("NPY_INT: %d\n", NPY_INT);
+	printf("NPY_LONG: %d\n", NPY_LONG);
+	printf("NPY_DOUBLE: %d\n", NPY_DOUBLE);
 
 	/* Check whether the input arrays are as needed. */
 	if(!double_2darray(unary_ar))
@@ -301,7 +306,7 @@ main(int argc, char *argv[])
 	Py_Initialize();
 
 	/* Add a static module. */
-	initmultarray();
+	initfast_cycle_solver();
 
 	return 0;
 }
