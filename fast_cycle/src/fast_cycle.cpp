@@ -44,6 +44,9 @@
 #include <Python.h>
 #include <arrayobject.h>        // to handle NumPy arrays. 
 
+/* The int array used by NumPy. */
+typedef long int __NPY_INT;
+
 using namespace CycleSolver;
 
 /* Returns pointer to the data array of a 1D NumPy double array. */
@@ -53,9 +56,9 @@ double *double_npy_1darray_to_Carray(PyArrayObject *arrayin)
 }
 
 /* Returns pointer to the data array of a 1D NumPy int array. */
-int *int_npy_1darray_to_Carray(PyArrayObject *arrayin)
+__NPY_INT *int_npy_1darray_to_Carray(PyArrayObject *arrayin)
 {
-	return (int *)arrayin->data;
+	return (__NPY_INT *)arrayin->data;
 }
 
 /* Returns a pointer which can be used to access elements of
@@ -79,7 +82,7 @@ double **double_npy_2darray_to_Carray(PyArrayObject *arrayin)
 	a    = (double *)arrayin->data;
 	for(i = 0; i < m; i ++)
 	{
-		data[m] = a + i*n;
+		data[i] = a + i*n;
 	}
 
 	return data;
@@ -88,25 +91,25 @@ double **double_npy_2darray_to_Carray(PyArrayObject *arrayin)
 /* Returns a pointer which can be used to access elements of
    a 2D NumPy int array. 
    data[i][j] will return the element at the i,j-th position. */
-int **int_npy_2darray_to_Carray(PyArrayObject *arrayin)
+__NPY_INT **int_npy_2darray_to_Carray(PyArrayObject *arrayin)
 {
 	int m, n;
 	int i;
-	int **data;
-	int *a; 
+	__NPY_INT **data;
+	__NPY_INT *a; 
 
 	/* Get the dimensions of the array. */
 	m    = arrayin->dimensions[0];
 	n    = arrayin->dimensions[1];
 
 	/* Create an array of int *s to refer to each row of the array. */
-	data = (int **)malloc(m*sizeof(int *));
+	data = (__NPY_INT **)malloc(m*sizeof(__NPY_INT *));
 
 	/* Pointer to arrayin-> data as int *. */
-	a    = (int *)arrayin->data;
+	a    = (__NPY_INT *)arrayin->data;
 	for(i = 0; i < m; i ++)
 	{
-		data[m] = a + i*n;
+		data[i] = a + i*n;
 	}
 
 	return data;
@@ -186,7 +189,7 @@ int int_2darray(PyArrayObject *vec)
 static PyObject *
 solver(PyObject *self, PyObject *args)
 {
-	int i; 
+	int i;
 
 	/* Create objects to handle the input lists */
 	PyArrayObject * unary_ar;				// Input unary energies.
@@ -197,7 +200,7 @@ solver(PyObject *self, PyObject *args)
 	/* The arrays which will store the unary energies, pairwise energies, and the number of labels. */
 	double **unaries;
 	double **pairwise;
-	int *n_labels;
+	__NPY_INT *n_labels;
 
 	/* The number of elements in these lists. */
 	int n_unaries;
@@ -205,10 +208,10 @@ solver(PyObject *self, PyObject *args)
 	int n_n_labels;
 
 	/* The data location of the output vector. */
-	int *l_data_;
+	__NPY_INT *l_data_;
 
 	/* Stores the dimensions of the output labels_ array. */
-	int dims[0];
+	int dims[2];
 
 	/* Parse inputs. */
 	if (!PyArg_ParseTuple(args, "OOO", &unary_ar, &pairwise_ar, &n_labels_ar))
@@ -218,17 +221,12 @@ solver(PyObject *self, PyObject *args)
 	if(unary_ar == NULL || pairwise_ar == NULL || n_labels_ar == NULL)
 		return NULL;
 
-	printf("n_labels: %d\n", n_labels_ar->descr->type_num);
-	printf("NPY_INT: %d\n", NPY_INT);
-	printf("NPY_LONG: %d\n", NPY_LONG);
-	printf("NPY_DOUBLE: %d\n", NPY_DOUBLE);
-
 	/* Check whether the input arrays are as needed. */
 	if(!double_2darray(unary_ar))
 		return NULL;
 	if(!double_2darray(pairwise_ar))
 		return NULL;
-	if(!int_2darray(n_labels_ar))
+	if(!int_1darray(n_labels_ar))
 		return NULL;
 
 	/* Extract the sizes of the arrays. These also tell us the number of 

@@ -77,7 +77,7 @@ namespace CycleSolver{
 			// generate a random cycle
 			void randomCycle(IdxType, IdxType, ValType);
 			// initialise cycle with specific unary and pairwise potentials. 	
-			void initialiseCycle(double *, double *, int *, int);
+			void initialiseCycle(double **, double **, long int *, int);
 
 			IdxType N; // length of cycle
 			std::vector<IdxType> card;   // has length size+1
@@ -165,18 +165,18 @@ namespace CycleSolver{
 		allocate_memory();
 	}
 
-	void Cycle::initialiseCycle(double * unaries, double * pairwise, int * n_labels, int n_nodes)
+	void Cycle::initialiseCycle(double ** unaries, double ** pairwise, long int * n_labels, int n_nodes)
 	{
 		N = n_nodes;
-		int max_n_labels = n_labels[0];
+		int max_n_labels = (int) n_labels[0];
 
 		card.assign(N+1, 0);
-		card[0]          = n_labels[0];
+		card[0]          = (int) n_labels[0];
 
 		for(IdxType i = 1; i < N; i ++)
 		{
-			card[i] = n_labels[i];
-			if(n_labels[i] > max_n_labels)
+			card[i] = (int) n_labels[i];
+			if(card[i] > max_n_labels)
 				max_n_labels = card[i];
 		}
 		card[N] = card[0];

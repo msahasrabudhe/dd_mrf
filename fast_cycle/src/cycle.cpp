@@ -89,7 +89,30 @@ int main(int argc, char* argv[])
 			pairwise[i][j] = randn(0.0, 1.0);
 	}
 
-	c.initialiseCycle(unaries, pairwise, n_labels);
+	double **un, **pw;
+	int *nl;
+
+	un = (double **)malloc(sizeof(double *)*N);
+	pw = (double **)malloc(sizeof(double *)*N);
+	nl = (int *)malloc(sizeof(int)*N);
+	for(IdxType i = 0; i < N; i ++)
+	{
+		nl[i] = n_labels[i];	
+		e_end = (i + 1)%N;
+		un[i] = (double *)malloc(sizeof(double)*n_labels[i]);
+		pw[i] = (double *)malloc(sizeof(double)*n_labels[i]*n_labels[e_end]);
+		for(IdxType j = 0; j < n_labels[i]; j ++)
+		{
+			un[i][j] = unaries[i][j];
+		}
+		for(IdxType j = 0; j < n_labels[i]*n_labels[e_end]; j ++)
+		{
+			pw[i][j] = pairwise[i][j];
+		}
+	}
+
+	//c.initialiseCycle(unaries, pairwise, n_labels);
+	c.initialiseCycle(un, pw, nl, N);
 	printf("Created random problem with N=%d, K=%d\n", N, K);
 
 	// Note: Here we use normal distribution in generating random cycle,
