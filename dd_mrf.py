@@ -15,12 +15,15 @@ import sys
 # Max product belief propagation on trees. 
 import bp			
 
+# Fast cycle solver. Wang and Koller, ICML 2013.
+import fast_cycle_solver as fsc
+
 
 # The dtype to use to store energies. 
 e_dtype = np.float64
 
 # List of slave types handled by this module. 
-handled_slave_types = ['cell', 'tree', 'mixed']
+handled_slave_types = ['cell', 'tree', 'cycle']
 
 class Slave:
 	'''
@@ -64,6 +67,12 @@ class Slave:
 		self.edge_energies	= edge_energies
 		self.graph_struct	= graph_struct
 		self.struct			= struct
+
+		# The max label any node can have. 
+		# TODO: Handle this so that sliced matrices are created in Graph._create_..._slaves()
+		#    and passed to Slave.set_params. Otherwise, the reshape operation in 
+		#    _optimise_cycle_slave() will not work. 
+		self.max_n_labels   = np.max(n_labels)
 
 		# These dictionaries enable to determine easily at which 
 		#    index in node_list or edge_list, a particular node
@@ -144,13 +153,13 @@ class Graph:
 	A Graph object can be created by specifying the number of nodes and the number of labels. 
 	Node energies and edge energies can be added later. Only after the addition of 
 	node and edge energies, can the user proceed to its optimisation. The optimisation
-	is done by first breaking the lattice into slaves (sub-graphs), and then iteratively solving
+	is done by first breaking the graph into slaves (sub-graphs), and then iteratively solving
 	them according to the DD-MRF algorithm. 
 	'''
 
 	def __init__(self, n_nodes, n_labels):
 		'''
-		Graph.__init__(): Initialise the lattice to be of shape (rows, cols), with 
+		Graph.__init__(): Initialise the graph to be of shape (rows, cols), with 
                             a node taking a maximum of n_labels. 
 		'''
 		# The rows, columns, and node indexing. 
@@ -188,7 +197,7 @@ class Graph:
 		self.edge_energies  = np.zeros((self.n_nodes*(self.n_nodes-1)/2, self.max_n_labels, self.max_n_labels))
 
 		# Flags set to ensure that node energies have been set. If any energies
-		# 	have not been set, we cannot proceed to optimisation as the lattice is not complete. 
+		# 	have not been set, we cannot proceed to optimisation as the graph is not complete. 
 		self.node_flags	    = np.zeros(self.n_nodes, dtype=np.bool)
 
 
@@ -276,7 +285,7 @@ class Graph:
 	
 	def _create_slaves(self, decomposition='cell', max_depth=5, slave_list=None):
 		'''
-		Graph._create_slaves(): Create slaves for this particular lattice.
+		Graph._create_slaves(): Create slaves for this particular graph.
 		The default decomposition is 'cell'. If 'row_col' is specified, create a set of trees
 		instead - one for every row and every column. 
 		If 'rook' is specified, create one slave for every vertex - defined by permitted rook moves
@@ -478,14 +487,14 @@ class Graph:
 
 	def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', max_depth=2, _momentum=0.0, _verbose=True, slave_list=None):
 		'''
-		Graph.optimise(): Optimise the set energies over the lattice and return a labelling. 
+		Graph.optimise(): Optimise the set energies over the graph and return a labelling. 
 
 		Takes as input a_start, which is a float and denotes the starting value of \\alpha_t in
 		the DD-MRF algorithm. 
 
 		struct specifies the type of decomposition to use. struct must be in handled_slave_types. 
-		'cell' specifies a decomposition in which the lattice in broken into 2x2 cells - each 
-		being a slave. 'row_col' specifies a decomposition in which the lattice is broken into
+		'cell' specifies a decomposition in which the graph in broken into 2x2 cells - each 
+		being a slave. 'row_col' specifies a decomposition in which the graph is broken into
 		rows and columns - each being a slave. 
 
 		The strategy signifies what values of \\alpha to use at iteration t. Permissible 
@@ -525,7 +534,7 @@ class Graph:
 			print 'Momentum must be in [0, 1).'
 			raise ValueError
 
-		# First check if the lattice is complete. 
+		# First check if the graph is complete. 
 		if not self.check_completeness():
 			n_list = np.where(self.node_flags == False)
 			print 'Graph.optimise(): The graph is not complete.'
@@ -1126,7 +1135,7 @@ class Graph:
 def _compute_node_updates(n_id, s_ids, slave_list, n_labels_nid):
 	'''
 	A function to handle parallel computation of node updates. 
-	The entire lattice cannot be passed as a parameter to this function, 
+	The entire graph cannot be passed as a parameter to this function, 
 	and so we must create a function that is not a member of the class Graph.
 	'''
 	# The number of slaves.
@@ -1169,7 +1178,7 @@ def _compute_node_updates(n_id, s_ids, slave_list, n_labels_nid):
 def _compute_edge_updates(e_id, s_ids, slave_list, pt_coords, n_labels):
 	'''
 	A function to handle parallel computation of edge updates. 
-	The entire lattice cannot be passed as a parameter to this function, 
+	The entire graph cannot be passed as a parameter to this function, 
 	and so we must create a function that is not a member of the class Graph.
 	'''
 	# The number of slaves that this edge belongs to. 
@@ -1346,6 +1355,30 @@ def _optimise_tree(slave):
 	# We return the energy. 
 	energy = _compute_tree_slave_energy(slave.node_energies, slave.edge_energies, labels, slave.graph_struct)
 	return labels, energy, messages, messages_in
+# ---------------------------------------------------------------------------------------
+
+
+def _optimise_cycle(slave):
+	'''
+	Optimise a cycle-slave. We use the fast cycle solver of Wang and Koller (ICML 2013).
+	At the core, the code is still the one released by Wang. However, a Python-wrapped
+	version of that code is used here. 
+	'''
+
+	# Node energies must be an (N, max_n_labels) Numpy np.float32 array. 
+	node_energies = slave.node_energies
+	# Edge energies must be an (n, max_n_labels*max_n_labels) Numpy np.float32 array. 
+	# It thus needs to be reshaped here. 
+	edge_energies = np.reshape(slave.edge_energies, [-1, slave.max_n_labels*slave.max_n_labels])
+	# The list of the number of labels. 
+	n_labels      = slave.n_labels
+
+	# Solve the cycle. 
+	labels        = fsc.solver(node_energies, edge_energies, n_labels)
+	# Compute energy of labelling. 
+	energy        = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, n_labels)
+	# Return the labelling and the energy.
+	return labels, energy
 # ---------------------------------------------------------------------------------------
 
 
