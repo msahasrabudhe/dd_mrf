@@ -1,4 +1,4 @@
-# Max product belief propagation
+# Max product belief propagation on trees. 
 
 import numpy as np
 import time
