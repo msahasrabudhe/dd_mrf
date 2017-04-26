@@ -23,7 +23,9 @@ import fast_cycle_solver as fsc
 e_dtype = np.float64
 
 # List of slave types handled by this module. 
-handled_slave_types = ['cell', 'tree', 'cycle']
+slave_types         = ['cell', 'tree', 'cycle']
+# List of allowed graph decompositions.
+decomposition_types = ['tree', 'mixed']
 
 class Slave:
 	'''
@@ -38,7 +40,7 @@ class Slave:
 		Slave.__init__(): Initialise parameters for this slave, if given. 
 		                  Parameters are None by default. 
 		'''
-		if struct not in handled_slave_types:
+		if struct not in slave_types:
 			print 'Slave struct not recognised: %s.' %(struct)
 			raise ValueError
 
@@ -56,7 +58,7 @@ class Slave:
 		Slave.set_params(): Set parameters for this slave.
 							Parameters must be specified.
 		'''
-		if struct not in handled_slave_types:
+		if struct not in slave_types:
 			print 'Slave struct not recognised: %s.' %(struct)
 			raise ValueError
 
@@ -283,16 +285,23 @@ class Graph:
 		return True
 
 	
-	def _create_slaves(self, decomposition='cell', max_depth=5, slave_list=None):
+	def _create_slaves(self, decomposition='mixed', max_depth=5, slave_list=None):
 		'''
 		Graph._create_slaves(): Create slaves for this particular graph.
-		The default decomposition is 'cell'. If 'row_col' is specified, create a set of trees
-		instead - one for every row and every column. 
-		If 'rook' is specified, create one slave for every vertex - defined by permitted rook moves
-		from that vertex. That is, for a point (i,j) we have a tree that extends in all directions from 
-		(i, j). 
-		If 'tree' is specified, create one slave for every node, of maximum depth specified by max_depth. 
+		The default decomposition is 'mixed'. Allowed values for decomposition are in
+		['mixed', 'tree', 'custom'].
+		If decomposition is 'mixed', try to find as many small cycles as possible in the graph,
+		and then decompose the rest of the graph into trees. 
+		If decomposition is 'tree', create a set of trees
+		instead by searching for trees in a greedy manner, starting at every node that
+		still has edges which are not yet in any tree. 
+		If decomposition is 'custom', the user can specify a custom decomposition. 
+		A decomposition is entirely defined by the list of slaves. An option shall 
+		be included later in which a decomposition can be specified using an adjacency
+		matrix (which shall be easier for the user).
 		'''
+		# TODO: Add functionality to allow the user to set a decomposition by specifying
+		#    the adjacency matrix. 
 
 		# self._max_nodes_in_slave, and self._max_edges_in_slave are used
 		#   to simplify node and edge updates. They shall be computed by the
@@ -314,6 +323,7 @@ class Graph:
 		# Functions to call depending on which slave is chosen
 		_slave_funcs = {
 			'tree':    _make_create_tree_slaves(max_depth),
+			'mixed':   self._create_mixed_slaves(),
 			'custom':  _make_create_custom_slaves(slave_list)
 		}
 		
@@ -357,9 +367,9 @@ class Graph:
 	def _create_tree_slaves(self, max_depth=5):
 		'''
 		Graph._create_tree_slaves: Create a list of tree-structured sub-problems. 
-		The number of such sub-problems created shall be equal to the number of nodes
-		in the graph. Each tree is rooted at a unique vertex, and has maximum depth
-		specified by max_depth.
+		Trees is detected in a greedy manner starting at the first node. 
+		Any further trees are started at a node if there are any edges
+		incident on that node that are not already in a tree. 
 		'''
 		
 		# A list to record in which slaves each vertex and edge occurs. 
@@ -383,6 +393,144 @@ class Graph:
 			tree_adj  = subtree_data[s_id][0]
 			node_list = np.array(subtree_data[s_id][1], dtype=np.int)
 			edge_list = np.array(subtree_data[s_id][2], dtype=np.int)
+
+			# Number of nodes and edges in this tree. 
+			n_nodes = node_list.size
+			n_edges = edge_list.size
+
+			# Update self._max_nodes_in_slave, and self._max_edges_in_slave
+			if self._max_nodes_in_slave < n_nodes:
+				self._max_nodes_in_slave = n_nodes
+			if self._max_edges_in_slave < n_edges:
+				self._max_edges_in_slave = n_edges
+
+			# Extract node energies. 
+			node_energies    = np.zeros((n_nodes, self.max_n_labels), dtype=e_dtype)
+			node_energies[:] = self.node_energies[node_list,:]
+
+			# Extract edge energies.
+			edge_energies    = np.zeros((n_edges, self.max_n_labels, self.max_n_labels), dtype=e_dtype)
+			edge_energies[:] = self.edge_energies[edge_list,:,:]
+
+			# The number of labels for each node here. 
+			n_labels         = np.zeros(n_nodes, dtype=np.int)
+			n_labels[:]      = self.n_labels[node_list]
+
+			# Create graph structure. 
+			gs = bp.make_graph_struct(tree_adj, n_labels)
+			# Set slave parameters. 
+			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+					edge_energies, gs, 'tree')
+
+			# Add this slave to the lists of nodes and edges in node_list and edge_list
+			for n_id in node_list:
+				self.nodes_in_slaves[n_id] += [s_id]
+			for e_id in edge_list:
+				self.edges_in_slaves[e_id] += [s_id]
+
+		# For convenience, make elements of self.nodes_in_slaves, and self.edges_in_slaves into
+		# Numpy arrays. 
+		self.nodes_in_slaves = [np.array(t) for t in self.nodes_in_slaves]
+		self.edges_in_slaves = [np.array(t) for t in self.edges_in_slaves]
+		# C'est ca.
+
+
+	def _create_mixed_slaves(self):
+		'''
+		Create mixed slaves. 
+		This algorithm tries to find a small cycle for every node, i.e., it 
+		iterates over the list of nodes, and for each node, tries to locate a cycle
+		that that node is a part of. If no such cycle is found, the algorithm moves on.
+		After a list of cycles has been obtained, all those edges are removed from 
+		the adjacency matrix, and the remaining adjacency matrix is broken into trees. 
+		NOTE: This algorithm does NOT locate all cycles in a graph, merely that
+		it locates AT LEAST ONE (if one exists) for every node.
+		The set of cycles and the resulting set of trees gives a decomposition
+		of the graph. 
+		'''
+		# We work with the adjacency matrix of this graph. 
+		# Create a copy of the adjacency matrix so that the original is not affected. 
+		adj_mat    = self.zeros_like(self.adj_mat)
+		adj_mat[:] = self.adj_mat[:]
+
+		# The list of cycles. 
+		list_cycles = []
+
+		# Iterate over every node to find a cycle.
+		for n in range(self.n_nodes):
+			# If the degree of this vertex is 1, there cannot be any cycles here. 
+			if np.sum(adj_mat[n,:]) == 1:
+				continue
+
+			# Locate a cycle starting at this node. 
+			c_n = find_cycle_in_graph(adj_mat, n)
+
+			# If no cycle is found, move on
+			if c_n is None:
+				continue
+
+			# The cycle outputs both the starting node twice. Remove it. 
+			c_n = c_n[1:]
+
+			# Add to our list of cycles. 
+			cycles += [c_n]
+			# Remove all edges in c_n from the graph. 
+			for t in range(len(c_n) - 1):
+				adj_mat[c_n[t], c_n[t+1]] = False
+				adj_mat[c_n[t+1[, c_n[t]] = False
+
+		# Now find trees in the remaining adjacency matrix. 
+		subtree_data = self._generate_trees_greedy(adjacency=adj_mat)
+
+		# The number of slaves is the length of cycles plus the length of subtree_data
+		n_cycles      = len(cycles)
+		self.n_slaves = len(cycles) + len(subtree_data) 
+
+		# Create slave list. 
+		self.slave_list = [Slave() for s in range(self.n_slaves)]
+
+		# Make cycle slaves first. 
+		for s_id in range(len(cycles)):
+			# The current cycle. 
+			c_n = cycles[s_id]
+
+			# Make node and edge lists. 
+			node_list = np.array(c_n, dtype=np.int)
+			edge_list = np.array_like(node_list)
+			for i in range(len(c_n)):
+				e0, e1       = c_n[i], c_n[(i+1)%len(c_n)]
+				e_id         = self._edge_id_from_node_ids[e0, e1]
+				edge_list[i] = e_id
+
+			# The number of labels for nodes in this slave. 
+			n_labels = self.n_list[node_list]
+
+			# Node energies
+			node_energies    = np.zeros((node_list.size, self.max_n_labels), dtype=e_dtype)
+			node_energies[:] = self.node_energies[node_list, :]
+
+			# Edge energies
+			edge_energies    = np.zeros((edge_list.size, self.max_n_labels, self.max_n_labels), dtype=e_dtype)
+			edge_energies[:] = self.edge_energies[edge_list, :, :]
+
+			# Set slave parameters. 
+			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
+
+			# Add this slave to the lists of nodes and edges in node_list and edge_list
+			for n_id in node_list:
+				self.nodes_in_slaves[n_id] += [s_id]
+			for e_id in edge_list:
+				self.edges_in_slaves[e_id] += [s_id]
+
+		# Now make tree slaves. 
+		for s_id in range(n_cycles, self.n_slaves):
+			# Tree ID is n_cycles less than s_id. 
+			t_id      = s_id - n_cycles
+
+			# Extract the adjacency matrices for this slave. 
+			tree_adj  = subtree_data[t_id][0]
+			node_list = np.array(subtree_data[t_id][1], dtype=np.int)
+			edge_list = np.array(subtree_data[t_id][2], dtype=np.int)
 
 			# Number of nodes and edges in this tree. 
 			n_nodes = node_list.size
@@ -492,7 +640,7 @@ class Graph:
 		Takes as input a_start, which is a float and denotes the starting value of \\alpha_t in
 		the DD-MRF algorithm. 
 
-		struct specifies the type of decomposition to use. struct must be in handled_slave_types. 
+		struct specifies the type of decomposition to use. struct must be in slave_types. 
 		'cell' specifies a decomposition in which the graph in broken into 2x2 cells - each 
 		being a slave. 'row_col' specifies a decomposition in which the graph is broken into
 		rows and columns - each being a slave. 
@@ -541,7 +689,7 @@ class Graph:
 			print 'The following nodes are not set:', n_list
 			raise AssertionError
 
-		# Trim edge energies and V - > E x E and E x E -> V maps. 
+		# Trim edge energies and the E - > V x V map.
 		self.edge_energies			= self.edge_energies[:self.n_edges,:,:]
 		self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self.n_edges,:]
 
@@ -919,15 +1067,20 @@ class Graph:
 
 		return _outputs
 
-	def _generate_trees_greedy(self):
+	def _generate_trees_greedy(self, adjacency=None):
 		'''
 		Generate trees in a greedy manner. The aim is to greedily generate trees starting at the first
 		node, so that each tree is as large as possible, and we can skip as many nodes for root as possible. 
 		'''
 		n_nodes = self.adj_mat.shape[0]
 
-		adj_mat_copy = np.zeros_like(self.adj_mat)
-		adj_mat_copy[:] = self.adj_mat[:]
+		# Make a copy of the adjacency matrix so that the original is not affected. 
+		if adjacency is None: 
+			adj_mat_copy = np.zeros_like(self.adj_mat)
+			adj_mat_copy[:] = self.adj_mat[:]
+		else
+			adj_mat_copy = np.zeros_like(adjacency)
+			adj_mat_copy[:] = adjacency[:]
 
 		# Set the max_depth to n_nodes, so that the maximum possible tree is discovered every time. 
 		max_depth = n_nodes
@@ -1376,7 +1529,7 @@ def _optimise_cycle(slave):
 	# Solve the cycle. 
 	labels        = fsc.solver(node_energies, edge_energies, n_labels)
 	# Compute energy of labelling. 
-	energy        = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, n_labels)
+	energy        = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, labels)
 	# Return the labelling and the energy.
 	return labels, energy
 # ---------------------------------------------------------------------------------------
@@ -1618,6 +1771,12 @@ def find_cycle_in_graph(adj, root):
 		else:
 			# Visited neighbours. 
 			visited_neighs = neighs[np.where(visited[neighs] == True)[0].tolist()]
+			# Remove visited neighbours that have a point in common with our current path. 
+			visited_neighs = [v for v in visited_neighs if np.intersect1d(shortest_paths[v][1:], cur_path[1:]).size == 0]
+			# If there are no such neighbours, i.e., if visited_neighs is empty, return None - there are no 
+			#    cycles of the type desired. 
+			if len(visited_neighs) == 0:
+				return None
 
 			# Path lengths for all visited neighbours. 
 			visited_plengths = [len(shortest_paths[v]) + len(cur_path) for v in visited_neighs]
