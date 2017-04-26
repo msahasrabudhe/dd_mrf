@@ -25,7 +25,7 @@ e_dtype = np.float64
 # List of slave types handled by this module. 
 slave_types         = ['cell', 'tree', 'cycle']
 # List of allowed graph decompositions.
-decomposition_types = ['tree', 'mixed']
+decomposition_types = ['tree', 'mixed', 'custom']
 
 class Slave:
 	'''
@@ -73,7 +73,7 @@ class Slave:
 		# The max label any node can have. 
 		# TODO: Handle this so that sliced matrices are created in Graph._create_..._slaves()
 		#    and passed to Slave.set_params. Otherwise, the reshape operation in 
-		#    _optimise_cycle_slave() will not work. 
+		#    _optimise_cycle() will not work. 
 		self.max_n_labels   = np.max(n_labels)
 
 		# These dictionaries enable to determine easily at which 
@@ -323,7 +323,7 @@ class Graph:
 		# Functions to call depending on which slave is chosen
 		_slave_funcs = {
 			'tree':    _make_create_tree_slaves(max_depth),
-			'mixed':   self._create_mixed_slaves(),
+			'mixed':   self._create_mixed_slaves,
 			'custom':  _make_create_custom_slaves(slave_list)
 		}
 		
@@ -448,13 +448,21 @@ class Graph:
 		The set of cycles and the resulting set of trees gives a decomposition
 		of the graph. 
 		'''
+		
+		# A list to record in which slaves each vertex and edge occurs. 
+		self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
+		self.edges_in_slaves = [[] for i in range(self.n_edges)]
+		# The maximum number of slaves a node and an edge can appear in. 
+		self._max_nodes_in_slave = 0
+		self._max_edges_in_slave = 0
+
 		# We work with the adjacency matrix of this graph. 
 		# Create a copy of the adjacency matrix so that the original is not affected. 
-		adj_mat    = self.zeros_like(self.adj_mat)
+		adj_mat    = np.zeros_like(self.adj_mat)
 		adj_mat[:] = self.adj_mat[:]
 
 		# The list of cycles. 
-		list_cycles = []
+		cycles = []
 
 		# Iterate over every node to find a cycle.
 		for n in range(self.n_nodes):
@@ -475,9 +483,10 @@ class Graph:
 			# Add to our list of cycles. 
 			cycles += [c_n]
 			# Remove all edges in c_n from the graph. 
-			for t in range(len(c_n) - 1):
-				adj_mat[c_n[t], c_n[t+1]] = False
-				adj_mat[c_n[t+1[, c_n[t]] = False
+			for t in range(len(c_n)):
+				e0, e1          = c_n[t], c_n[(t+1)%len(c_n)]
+				adj_mat[e0, e1] = False
+				adj_mat[e1, e0] = False
 
 		# Now find trees in the remaining adjacency matrix. 
 		subtree_data = self._generate_trees_greedy(adjacency=adj_mat)
@@ -494,16 +503,29 @@ class Graph:
 			# The current cycle. 
 			c_n = cycles[s_id]
 
+			print c_n
+
 			# Make node and edge lists. 
 			node_list = np.array(c_n, dtype=np.int)
-			edge_list = np.array_like(node_list)
+			edge_list = np.zeros_like(node_list)
+
+			# Number of nodes and edges. 
+			n_nodes   = node_list.size
+			n_edges   = edge_list.size
+
 			for i in range(len(c_n)):
 				e0, e1       = c_n[i], c_n[(i+1)%len(c_n)]
 				e_id         = self._edge_id_from_node_ids[e0, e1]
 				edge_list[i] = e_id
 
 			# The number of labels for nodes in this slave. 
-			n_labels = self.n_list[node_list]
+			n_labels = self.n_labels[node_list]
+
+			# Update self._max_nodes_in_slave, and self._max_edges_in_slave
+			if self._max_nodes_in_slave < n_nodes:
+				self._max_nodes_in_slave = n_nodes
+			if self._max_edges_in_slave < n_edges:
+				self._max_edges_in_slave = n_edges
 
 			# Node energies
 			node_energies    = np.zeros((node_list.size, self.max_n_labels), dtype=e_dtype)
@@ -511,7 +533,21 @@ class Graph:
 
 			# Edge energies
 			edge_energies    = np.zeros((edge_list.size, self.max_n_labels, self.max_n_labels), dtype=e_dtype)
-			edge_energies[:] = self.edge_energies[edge_list, :, :]
+			# Here, we must adjust self.edge_energies before transferring them to a slave. 
+			# This is because self.edge_energies always has energies for an edge from a lower node index
+			#    to a higher node index, but this convention might not be followed in the cycle. 
+			for _e in range(edge_list.size):
+				# Get the edge ID in the Graph. 
+				e_id     = edge_list[_e]
+				# Get edge ends from the Graph. 
+				e0, e1   = self._node_ids_from_edge_id[e_id]
+				
+				# Now if e0 < e1, we can use the edge energies matrix for this edge, 
+				#    but in the other case, we must transpose it. 
+				if e0 < e1:
+					edge_energies[_e, :, :] = self.edge_energies[e_id, :, :]
+				else:
+					edge_energies[_e, :, :] = self.edge_energies[e_id, :, :].T
 
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
@@ -531,6 +567,10 @@ class Graph:
 			tree_adj  = subtree_data[t_id][0]
 			node_list = np.array(subtree_data[t_id][1], dtype=np.int)
 			edge_list = np.array(subtree_data[t_id][2], dtype=np.int)
+
+			for e in edge_list:
+				print self._node_ids_from_edge_id[e], 
+			print
 
 			# Number of nodes and edges in this tree. 
 			n_nodes = node_list.size
@@ -658,7 +698,7 @@ class Graph:
 		'''
 
 		# Check if a permissible decomposition is used. 
-		if decomposition not in ['tree', 'custom']:
+		if decomposition not in decomposition_types:
 			print 'Permissible values for decomposition are \'tree\', and \'custom\' .'
 			print 'Custom decomposition must be specified in the form of a list of slaves if \'custom\' is chosen.'
 			raise ValueError
@@ -1078,7 +1118,7 @@ class Graph:
 		if adjacency is None: 
 			adj_mat_copy = np.zeros_like(self.adj_mat)
 			adj_mat_copy[:] = self.adj_mat[:]
-		else
+		else:
 			adj_mat_copy = np.zeros_like(adjacency)
 			adj_mat_copy[:] = adjacency[:]
 
@@ -1592,6 +1632,8 @@ def _optimise_slave(s):
 		return _optimise_4node_slave(s)
 	elif s.struct == 'tree':
 		return _optimise_tree(s)
+	elif s.struct == 'cycle':
+		return _optimise_cycle(s)
 	else:
 		print 'Slave structure not recognised: %s.' %(s.struct)
 		raise ValueError
