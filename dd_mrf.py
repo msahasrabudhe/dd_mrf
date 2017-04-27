@@ -503,8 +503,6 @@ class Graph:
 			# The current cycle. 
 			c_n = cycles[s_id]
 
-			print c_n
-
 			# Make node and edge lists. 
 			node_list = np.array(c_n, dtype=np.int)
 			edge_list = np.zeros_like(node_list)
@@ -514,12 +512,16 @@ class Graph:
 			n_edges   = edge_list.size
 
 			for i in range(len(c_n)):
-				e0, e1       = c_n[i], c_n[(i+1)%len(c_n)]
+				e0, e1       = node_list[i], node_list[(i+1)%n_nodes]
 				e_id         = self._edge_id_from_node_ids[e0, e1]
 				edge_list[i] = e_id
 
 			# The number of labels for nodes in this slave. 
-			n_labels = self.n_labels[node_list]
+			n_labels       = np.zeros(n_nodes, dtype=np.int)
+			n_labels[:]    = self.n_labels[node_list]
+
+			# Max label for this slave. 
+			s_max_n_labels = np.max(n_labels)
 
 			# Update self._max_nodes_in_slave, and self._max_edges_in_slave
 			if self._max_nodes_in_slave < n_nodes:
@@ -528,26 +530,28 @@ class Graph:
 				self._max_edges_in_slave = n_edges
 
 			# Node energies
-			node_energies    = np.zeros((node_list.size, self.max_n_labels), dtype=e_dtype)
-			node_energies[:] = self.node_energies[node_list, :]
+			node_energies    = np.zeros((node_list.size, s_max_n_labels), dtype=e_dtype)
+			node_energies[:] = self.node_energies[node_list, 0:s_max_n_labels]
 
 			# Edge energies
-			edge_energies    = np.zeros((edge_list.size, self.max_n_labels, self.max_n_labels), dtype=e_dtype)
+			edge_energies    = np.zeros((edge_list.size, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
 			# Here, we must adjust self.edge_energies before transferring them to a slave. 
 			# This is because self.edge_energies always has energies for an edge from a lower node index
 			#    to a higher node index, but this convention might not be followed in the cycle. 
 			for _e in range(edge_list.size):
 				# Get the edge ID in the Graph. 
 				e_id     = edge_list[_e]
+				# Edge end indices in node_list
+				i0, i1   = i, (i+1)%n_nodes
 				# Get edge ends from the Graph. 
-				e0, e1   = self._node_ids_from_edge_id[e_id]
+				e0, e1   = node_list[i0], node_list[i1]
 				
 				# Now if e0 < e1, we can use the edge energies matrix for this edge, 
 				#    but in the other case, we must transpose it. 
 				if e0 < e1:
-					edge_energies[_e, :, :] = self.edge_energies[e_id, :, :]
+					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e0], 0:self.n_labels[e1]]
 				else:
-					edge_energies[_e, :, :] = self.edge_energies[e_id, :, :].T
+					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e1], 0:self.n_labels[e0]].T
 
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
@@ -576,6 +580,13 @@ class Graph:
 			n_nodes = node_list.size
 			n_edges = edge_list.size
 
+			# The number of labels for each node here. 
+			n_labels         = np.zeros(n_nodes, dtype=np.int)
+			n_labels[:]      = self.n_labels[node_list]
+
+			# Max label for this slave. 
+			s_max_n_labels = np.max(n_labels)
+
 			# Update self._max_nodes_in_slave, and self._max_edges_in_slave
 			if self._max_nodes_in_slave < n_nodes:
 				self._max_nodes_in_slave = n_nodes
@@ -583,16 +594,12 @@ class Graph:
 				self._max_edges_in_slave = n_edges
 
 			# Extract node energies. 
-			node_energies    = np.zeros((n_nodes, self.max_n_labels), dtype=e_dtype)
-			node_energies[:] = self.node_energies[node_list,:]
+			node_energies    = np.zeros((n_nodes, s_max_n_labels), dtype=e_dtype)
+			node_energies[:] = self.node_energies[node_list, 0:s_max_n_labels]
 
 			# Extract edge energies.
-			edge_energies    = np.zeros((n_edges, self.max_n_labels, self.max_n_labels), dtype=e_dtype)
-			edge_energies[:] = self.edge_energies[edge_list,:,:]
-
-			# The number of labels for each node here. 
-			n_labels         = np.zeros(n_nodes, dtype=np.int)
-			n_labels[:]      = self.n_labels[node_list]
+			edge_energies    = np.zeros((n_edges, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
+			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
 
 			# Create graph structure. 
 			gs = bp.make_graph_struct(tree_adj, n_labels)
@@ -761,7 +768,7 @@ class Graph:
 		# Create update variables for slaves. Created once, reset to zero each time
 		#   _apply_param_updates() is called. 
 		self._slave_node_up	= np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels))
-		self._slave_edge_up	= np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels*self.max_n_labels))
+		self._slave_edge_up	= np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels, self.max_n_labels))
 		# Create a copy of these to hold the previous state update. Akin to momentum
 		#   update used in NNs. 
 		self._prv_node_sg   = np.zeros_like(self._slave_node_up)
@@ -966,7 +973,7 @@ class Graph:
 			# Retrieve labellings of this edge, assigned by each slave.
 			x, y	= self._node_ids_from_edge_id[e_id,:]
 			ls_		= np.array([
-						make_one_hot([self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)], self.n_labels[x], self.n_labels[y]) 
+						make_one_hot((self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)), self.n_labels[x], self.n_labels[y]) 
 						for s in s_ids])
 			ls_avg_	= np.mean(ls_, axis=0)
 	
@@ -990,7 +997,7 @@ class Graph:
 			sl_eids = [self.slave_list[s].edge_map[e_id] for s in s_ids]
 	
 			# Mark this update to be done later. 
-			self._slave_edge_up[s_ids, sl_eids, :self.n_labels[x]*self.n_labels[y]] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
+			self._slave_edge_up[s_ids, sl_eids, :self.n_labels[x], :self.n_labels[y]] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
 			# Add this value to the subgradient. 
 			norm_gt	+= np.sum(_edge_up**2)
 			# Mark this slave for edge updates. 
@@ -1025,15 +1032,17 @@ class Graph:
 		# Perform the marked updates. The slaves to be updates are also the slaves
 		#   to be solved!
 		for s_id in self._slaves_to_solve:
+			s_max_n_labels     = self.slave_list[s_id].max_n_labels
 			if self._mark_sl_up[0, s_id]:
 				# Node updates have been marked. 
 				n_nodes_this_slave = self.slave_list[s_id].node_list.size
-				self.slave_list[s_id].node_energies += alpha*self._slave_node_up[s_id,:n_nodes_this_slave,:]
+				self.slave_list[s_id].node_energies += alpha*self._slave_node_up[s_id,:n_nodes_this_slave, 0:s_max_n_labels]
 
 			if self._mark_sl_up[1, s_id]:
 			 	# Edge updates have been marked. 
 				n_edges_this_slave = self.slave_list[s_id].edge_list.size
-				self.slave_list[s_id].edge_energies += alpha*np.reshape(self._slave_edge_up[s_id,:n_edges_this_slave,:], [n_edges_this_slave,self.max_n_labels,self.max_n_labels])
+				self.slave_list[s_id].edge_energies += alpha*self._slave_edge_up[s_id,:n_edges_this_slave, 0:s_max_n_labels, 0:s_max_n_labels]
+#				self.slave_list[s_id].edge_energies += alpha*np.reshape(self._slave_edge_up[s_id,:n_edges_this_slave,:], [n_edges_this_slave,self.max_n_labels,self.max_n_labels])
 
 		# Copy the subgradient for the next iteration. 
 		self._prv_node_sg[:] = self._slave_node_up[:]
@@ -1562,7 +1571,13 @@ def _optimise_cycle(slave):
 	node_energies = slave.node_energies
 	# Edge energies must be an (n, max_n_labels*max_n_labels) Numpy np.float32 array. 
 	# It thus needs to be reshaped here. 
-	edge_energies = np.reshape(slave.edge_energies, [-1, slave.max_n_labels*slave.max_n_labels])
+	edge_energies = np.zeros((slave.edge_energies.shape[0], slave.max_n_labels*slave.max_n_labels))
+	for n in range(slave.node_list.size):
+		e0, e1               	     = n, (n+1)%slave.node_list.size
+		nl_e0                        = slave.n_labels[e0]
+		nl_e1                        = slave.n_labels[e1]
+		numel_pw                     = nl_e0*nl_e1
+		edge_energies[n, 0:numel_pw] = np.reshape(slave.edge_energies[n, :nl_e0, :nl_e1], (numel_pw,))
 	# The list of the number of labels. 
 	n_labels      = slave.n_labels
 
@@ -1653,14 +1668,12 @@ def make_one_hot(label, s1, s2=None):
 		label = int(label)
 
 	# Number of labels in the final vector. 
-	size = s1 if s2 is None else s1*s2	
+	size = s1 if s2 is None else (s1, s2)
 
 	# Make final vector. 
 	oh_vec = np.zeros(size, dtype=np.bool)
 	
 	# Set label.
-	if type(label) == list or type(label) == tuple:
-		label = label[0]*s2 + label[1]
 	oh_vec[label] = True
 	# Return 
 	return oh_vec
