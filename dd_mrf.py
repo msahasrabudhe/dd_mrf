@@ -1920,6 +1920,6 @@ def find_longest_cycle_in_graph(adj_mat, root):
 			return None
 
 		# Insert non-visited neighbours into queue. 
-		non_visited = np.array([_n for _n in neighs if not visited[_n])
+		non_visited = np.array([_n for _n in neighs if not visited[_n]])
 
 
