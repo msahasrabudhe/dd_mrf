@@ -542,26 +542,27 @@ class Graph:
 
 			# Edge energies
 			edge_energies    = np.zeros((edge_list.size, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
+			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
 			# Here, we must adjust self.edge_energies before transferring them to a slave. 
 			# This is because self.edge_energies always has energies for an edge from a lower node index
 			#    to a higher node index, but this convention might not be followed in the cycle. 
-			for _e in range(edge_list.size):
-				# Get the edge ID in the Graph. 
-				e_id     = edge_list[_e]
-				# Edge end indices in node_list
-				i0, i1   = _e, (_e+1)%n_nodes
-				# Get edge ends from the Graph. 
-				e0, e1   = node_list[i0], node_list[i1]
-
-				assert(n_labels[i0] == self.n_labels[e0])
-				assert(n_labels[i1] == self.n_labels[e1])
-				
-				# Now if e0 < e1, we can use the edge energies matrix for this edge, 
-				#    but in the other case, we must transpose it. 
-				if e0 < e1:
-					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e0], 0:self.n_labels[e1]]
-				else:
-					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e1], 0:self.n_labels[e0]].T
+#			for _e in range(edge_list.size):
+#				# Get the edge ID in the Graph. 
+#				e_id     = edge_list[_e]
+#				# Edge end indices in node_list
+#				i0, i1   = _e, (_e+1)%n_nodes
+#				# Get edge ends from the Graph. 
+#				e0, e1   = node_list[i0], node_list[i1]
+#
+#				assert(n_labels[i0] == self.n_labels[e0])
+#				assert(n_labels[i1] == self.n_labels[e1])
+#				
+#				# Now if e0 < e1, we can use the edge energies matrix for this edge, 
+#				#    but in the other case, we must transpose it. 
+#				if e0 < e1:
+#					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e0], 0:self.n_labels[e1]]
+#				else:
+#					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e1], 0:self.n_labels[e0]].T
 
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
@@ -929,6 +930,47 @@ class Graph:
 
 	# End of Graph._optimise_slaves()
 
+
+	def check_decomposition(self):
+		'''
+		Check the correctness of a decomposition. 
+		To optimise, the dual and the primal must be in agreement. 
+		'''
+		# Iterate over nodes to check that node energies are split
+		#    correctly among slaves. 
+		for n_id in range(self.n_nodes):
+			print 'Checking node %d ...' %(n_id)
+			_n_energy = 0.0
+			for s_id in self.nodes_in_slaves[n_id]:
+				n_id_in_s = self.slave_list[s_id].node_map[n_id]
+				n_lbl     = self.n_labels[n_id]
+
+				_n_energy += self.slave_list[s_id].node_energies[n_id_in_s, :n_lbl]
+			try:
+				assert(np.array_equal(_n_energy, self.node_energies[n_id, :n_lbl]))
+			except AssertionError:
+				print 'Graph.check_decomposition: Dual decomposition disagreement for node %d.' %(n_id)
+				print 'Graph.check_decomposition: Node energies in PRIMAL are ', self.node_energies[n_id, :n_lbl].tolist()
+				print 'Graph.check_decomposition: Sum of node energies in the DUAL is ', _n_energy.tolist()
+
+		for e_id in range(self.n_edges):
+			print 'Checking edge %d ...' %(e_id)
+			_e_energy = 0.0
+			x, y = self._node_ids_from_edge_id[e_id]
+			for s_id in self.edges_in_slaves[e_id]:
+				e_id_in_s        = self.slave_list[s_id].edge_map[e_id]
+				n_lbl_x, n_lbl_y = self.n_labels[x], self.n_labels[y]
+				
+				_e_energy        += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
+			try:
+				assert(np.array_equal(_e_energy, self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]))
+			except AssertionError:
+				print 'Graph.check_decomposition: Dual decomposition disagreement for edge %d, with edge_ends %d and %d.' %(e_id, x, y)
+				print 'Graph.check_decomposition: Edge energies in PRIMAL are ', self.edge_energies[e_id, :n_lbl_x, :n_lbl_y].flatten().tolist()
+				print 'Graph.check_decomposition: Sum of edge energies in the DUAL is ', _e_energy.flatten().tolist()
+
+		return True
+
 	
 	def _apply_param_updates(self, a_start, it):
 		'''
@@ -1033,7 +1075,7 @@ class Graph:
 		self._slaves_to_solve = np.where(np.sum(self._mark_sl_up, axis=0)!=0)[0]
 
 		# Record the norm of the subgradient. 
-		self.subgradient_norms += [np.sqrt(norm_gt)]
+		self.subgradient_norms += [norm_gt]
 
 		# Add momentum.
 		if it > 1:
@@ -1062,7 +1104,7 @@ class Graph:
 			if self._mark_sl_up[0, s_id]:
 				# Node updates have been marked. 
 				n_nodes_this_slave = self.slave_list[s_id].node_list.size
-				self.slave_list[s_id].node_energies += alpha*self._slave_node_up[s_id,:n_nodes_this_slave, 0:s_max_n_labels]
+				self.slave_list[s_id].node_energies += alpha*self._slave_node_up[s_id, :n_nodes_this_slave, 0:s_max_n_labels]
 
 			if self._mark_sl_up[1, s_id]:
 			 	# Edge updates have been marked. 
@@ -1603,7 +1645,11 @@ def _optimise_cycle(slave):
 		nl_e0                        = slave.n_labels[e0]
 		nl_e1                        = slave.n_labels[e1]
 		numel_pw                     = nl_e0*nl_e1
-		edge_energies[n, 0:numel_pw] = np.reshape(slave.edge_energies[n, :nl_e0, :nl_e1], (numel_pw,))
+		if slave.node_list[e0] < slave.node_list[e1]:
+			slave_edge_energies      = slave.edge_energies[n, :nl_e0, :nl_e1]
+		else:
+			slave_edge_energies      = np.transpose(slave.edge_energies[n, :nl_e1, :nl_e0])
+		edge_energies[n, 0:numel_pw] = np.reshape(slave_edge_energies, (numel_pw,))
 	# The list of the number of labels. 
 	n_labels      = slave.n_labels
 
