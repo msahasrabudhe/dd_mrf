@@ -79,7 +79,7 @@ class Slave:
 		self.n_edges        = self.edge_list.size
 
 		# Generate all label permutations. Saves time by using more memory. 
-		self.all_labellings = _generate_label_permutations(self.n_labels)
+#		self.all_labellings = _generate_label_permutations(self.n_labels)
 
 		# The max label any node can have. 
 		# TODO: Handle this so that sliced matrices are created in Graph._create_..._slaves()
@@ -325,6 +325,11 @@ class Graph:
 			def h():
 				return self._create_tree_slaves(max_depth=md)
 			return h
+		# Create a closure to handle the required input of max_depth to self._create_mixed_slaves().
+		def _make_create_mixed_slaves(md):
+			def h():
+				return self._create_mixed_slaves(max_length=md)
+			return h
 		# Create a closure to handle the required input of slave_list to self._create_custom_slaves().
 		def _make_create_custom_slaves(sl):
 			def h():
@@ -334,7 +339,7 @@ class Graph:
 		# Functions to call depending on which slave is chosen
 		_slave_funcs = {
 			'tree':    _make_create_tree_slaves(max_depth),
-			'mixed':   self._create_mixed_slaves,
+			'mixed':   _make_create_mixed_slaves(max_depth),
 			'custom':  _make_create_custom_slaves(slave_list)
 		}
 		
@@ -449,7 +454,7 @@ class Graph:
 		# C'est ca.
 
 
-	def _create_mixed_slaves(self):
+	def _create_mixed_slaves(self, max_length=6):
 		'''
 		Create mixed slaves. 
 		This algorithm tries to find a small cycle for every node, i.e., it 
@@ -474,6 +479,11 @@ class Graph:
 		# Create a copy of the adjacency matrix so that the original is not affected. 
 		adj_mat    = np.zeros_like(self.adj_mat)
 		adj_mat[:] = self.adj_mat[:]
+
+		# Adjust max_length. It is set to 6 by default, because self.n_nodes + 1 is too high, 
+		#    and computationally very expensive. 
+		if max_length == -1:
+			max_length = self.n_nodes + 1
 
 #		# The list of cycles. 
 #		cycles = []
@@ -507,7 +517,7 @@ class Graph:
 ##				adj_mat[e1, e0] = False
 
 		# The list of cycles. 
-		cycles = dfs_unique_cycles(adj_mat, max_length=4)
+		cycles = dfs_unique_cycles(adj_mat, max_length=max_length)
 		# Remove edges from the graph that are already in these cycles. 
 		for c_n in cycles:
 			for _n in range(len(c_n)):
@@ -919,7 +929,7 @@ class Graph:
 				%(self.subgradient_norms[-1], primal_cost, dual_cost, primal_cost-dual_cost, self._best_primal_cost - self._best_dual_cost)
 
 			# Switch to step strategy if n_miss = disagreements.size < 5% of number of nodes. 
-			if self._optim_strategy is 'adaptive' and  disagreements.size < 0.001*self.n_nodes:
+			if self._optim_strategy is 'adaptive' and  disagreements.size < 0.000*self.n_nodes:
 				print 'Switching to step strategy as n_miss < 0.1% of the number of nodes.'
 				a_start = alpha
 				self._optim_strategy = 'step'
@@ -974,25 +984,36 @@ class Graph:
 		'''
 		# Iterate over nodes to check that node energies are split
 		#    correctly among slaves. 
+
+		def _array_equal(a, b, epsilon=1e-8):
+			'''
+			Check whether two arrays are equal up to a precision.
+			'''
+			for i, t in np.ndenumerate(a):
+				if np.abs(a[i] - b[i]) > epsilon:
+					return False
+			return True
+
+		print 'Checking nodes. [ ',
 		for n_id in range(self.n_nodes):
-			print 'Checking node %d ...' %(n_id), 
+			print '%d' %(n_id),
 			_n_energy = 0.0
 			for s_id in self.nodes_in_slaves[n_id]:
 				n_id_in_s = self.slave_list[s_id].node_map[n_id]
 				n_lbl     = self.n_labels[n_id]
 
 				_n_energy += self.slave_list[s_id].node_energies[n_id_in_s, :n_lbl]
-			if not np.array_equal(_n_energy, self.node_energies[n_id, :n_lbl]):
+			if not _array_equal(_n_energy, self.node_energies[n_id, :n_lbl]):
 				print '\nGraph.check_decomposition: Dual decomposition disagreement for node %d.' %(n_id)
 				print 'Graph.check_decomposition: Node energies in PRIMAL are '
 				print self.node_energies[n_id, :n_lbl]
 				print 'Graph.check_decomposition: Sum of node energies in the DUAL is '
 				print _n_energy.tolist()
-			else:
-				print ' okay.'
+		print ' ]' 
 
+		print 'Checking edges. [ ',
 		for e_id in range(self.n_edges):
-			print 'Checking edge %d ...' %(e_id),
+			print '%d' %(e_id),
 			_e_energy = 0.0
 			x, y = self._node_ids_from_edge_id[e_id,:]
 			for s_id in self.edges_in_slaves[e_id]:
@@ -1000,14 +1021,13 @@ class Graph:
 				n_lbl_x, n_lbl_y = self.n_labels[x], self.n_labels[y]
 				
 				_e_energy        += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
-			if not np.array_equal(_e_energy, self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]):
+			if not _array_equal(_e_energy, self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]):
 				print '\nGraph.check_decomposition: Dual decomposition disagreement for edge %d, with edge_ends %d and %d.' %(e_id, x, y)
 				print 'Graph.check_decomposition: Edge energies in PRIMAL are '
 				print self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]
 				print 'Graph.check_decomposition: Sum of edge energies in the DUAL is '
 				print _e_energy
-			else:
-				print 'okay.'
+		print ' ]'
 
 		return True
 
@@ -1281,17 +1301,19 @@ class Graph:
 		edge_conflicts = np.zeros(self.n_edges, dtype=bool)
 
 		for n_id in range(self.n_nodes):
+			if self._n_slaves_nodes[n_id] == 1:
+				continue
 			s_ids	= self.nodes_in_slaves[n_id]
 			ls_		= [self.slave_list[s].get_node_label(n_id) for s in s_ids]
-			ret_	= reduce(lambda x,y: x and (y == ls_[0]), ls_[1:], True)
-			if not ret_:
+			ret_	= map(lambda x: x == ls_[0], ls_[1:])
+			if False in ret_:
 				node_conflicts[n_id] = True
 
 		# Update self._check_nodes to find only those nodes where a disagreement exists. 
 		self._check_nodes = np.where(node_conflicts == True)[0].astype(np.int)
 		# Find disagreeing edges. We iterate over self._check_nodes, and add all 
 		#    neighbours of a node in _check_nodes. 
-		for i in range(self._check_nodes.size - 1):
+		for i in range(self._check_nodes.size):
 			n_id = self._check_nodes[i]
 			neighs = np.where(self.adj_mat[i,:] == True)[0]
 			e_neighs = [self._edge_id_from_node_ids[n_id, _n] for _n in neighs]
@@ -1625,10 +1647,8 @@ def _optimise_4node_slave(slave):
 	n_labels			= slave.n_labels
 	edge_energies		= slave.edge_energies
 
-	# Generate all labellings. 
-	[ni, nj, nk, nl]	= n_labels
-	all_labellings		= np.array([[i,j,k,l] for i in range(ni) for j in range(nj) 
-								for k in range(nk) for l in range(nl)])
+	# Use already generated all labellings. 
+	all_labellings      = slave.all_labellings
 	
 	# Minimum energy. We set the minimum energy to four times the maximum node energy plus
 	# 	four times the maximum edge energy. 
@@ -1675,44 +1695,46 @@ def _optimise_cycle(slave):
 	version of that code is used here. 
 	'''
 
-#	# Node energies must be an (N, max_n_labels) Numpy np.float32 array. 
-#	node_energies    = np.zeros_like(slave.node_energies)
-#	node_energies[:] = slave.node_energies[:]
-#	# Edge energies must be an (n, max_n_labels*max_n_labels) Numpy np.float32 array. 
-#	# It thus needs to be reshaped here. 
-#	edge_energies = np.zeros((slave.edge_energies.shape[0], slave.max_n_labels*slave.max_n_labels))
-#	for n in range(slave.n_nodes):
-#		e0, e1               	     = n, (n+1)%slave.n_nodes
-#		nl_e0                        = slave.n_labels[e0]
-#		nl_e1                        = slave.n_labels[e1]
-#		numel_pw                     = nl_e0*nl_e1
-#		if slave.node_list[e0] < slave.node_list[e1]:
-#			slave_edge_energies      = slave.edge_energies[n, :nl_e0, :nl_e1]
-#		else:
-#			slave_edge_energies      = np.transpose(slave.edge_energies[n, :nl_e1, :nl_e0])
-#		edge_energies[n, 0:numel_pw] = np.reshape(slave_edge_energies, (numel_pw,))
-#	# The list of the number of labels. 
-#	n_labels      = np.zeros_like(slave.n_labels)
-#	n_labels[:]   = slave.n_labels
-#
-#	# Solve the cycle. 
-#	labels        = fsc.solver(node_energies, edge_energies, n_labels)
-#	# Compute energy of labelling. 
-#	energy        = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, labels, slave.node_list)
-#	# Return the labelling and the energy.
-#	return labels, energy
+	# Node energies must be an (N, max_n_labels) Numpy np.float32 array. 
+	node_energies    = np.zeros_like(slave.node_energies)
+	node_energies[:] = slave.node_energies[:]
+	# Edge energies must be an (n, max_n_labels*max_n_labels) Numpy np.float32 array. 
+	# It thus needs to be reshaped here. 
+	edge_energies = np.zeros((slave.edge_energies.shape[0], slave.max_n_labels*slave.max_n_labels))
+	for n in range(slave.n_nodes):
+		e0, e1               	     = n, (n+1)%slave.n_nodes
+		nl_e0                        = slave.n_labels[e0]
+		nl_e1                        = slave.n_labels[e1]
+		numel_pw                     = nl_e0*nl_e1
+		if slave.node_list[e0] < slave.node_list[e1]:
+			slave_edge_energies      = slave.edge_energies[n, :nl_e0, :nl_e1]
+		else:
+			slave_edge_energies      = np.transpose(slave.edge_energies[n, :nl_e1, :nl_e0])
 
-	# Brute force solver here. 
-	all_labellings = slave.all_labellings
-	min_energy     = 1e10
-	min_labels     = []
-	for i in range(len(all_labellings)):
-		cur_labels = all_labellings[i]
-		cur_energy = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, cur_labels, slave.node_list)
-		if cur_energy < min_energy:
-			min_energy = cur_energy
-			min_labels = cur_labels
-	return min_labels, min_energy
+		# [0, 1, 0] needed in np.reshape because Wang's code assumes column-first ordering!
+		edge_energies[n, 0:numel_pw] = np.reshape(slave_edge_energies, (numel_pw,), [0, 1, 0])		
+	# The list of the number of labels. 
+	n_labels      = np.zeros_like(slave.n_labels)
+	n_labels[:]   = slave.n_labels
+
+	# Solve the cycle. 
+	labels        = fsc.solver(node_energies, edge_energies, n_labels)
+	# Compute energy of labelling. 
+	energy        = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, labels, slave.node_list)
+	# Return the labelling and the energy.
+	return labels, energy
+
+#	# Brute force solver here. 
+#	all_labellings = slave.all_labellings
+#	min_energy     = 1e10
+#	min_labels     = []
+#	for i in range(len(all_labellings)):
+#		cur_labels = all_labellings[i]
+#		cur_energy = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, cur_labels, slave.node_list)
+#		if cur_energy < min_energy:
+#			min_energy = cur_energy
+#			min_labels = cur_labels
+#	return min_labels, min_energy
 
 # ---------------------------------------------------------------------------------------
 
@@ -1877,10 +1899,11 @@ def _generate_tree_with_root(_in):
 		visited[neighbours] = True
 
 		# Add these edges to the adjacency matrix. 
-		for _n in neighbours:
-			_from = np.min([_v, _n])		# Edges are always from low index to high index. 
-			_to   = _v + _n - _from			
-			tree_adjmat[_from, _to] = True
+		tree_adjmat[_v, neighbours] = True
+#		for _n in neighbours:
+#			_from = np.min([_v, _n])		# Edges are always from low index to high index. 
+#			_to   = _v + _n - _from			
+#			tree_adjmat[_from, _to] = True
 #		tree_adjmat[_v, neighbours] = True			# Old. Possibly wrong. 
 
 		# Insert these in the queue. 
@@ -1890,12 +1913,12 @@ def _generate_tree_with_root(_in):
 	# The node list can be obtained directly from visited. 
 	node_list = np.where(visited == True)[0].astype(np.int)
 
-	# These are the edge ends. 
-	edge_ends = np.where(tree_adjmat == True)
-	edge_list = [_edge_id_from_node_ids[e0,e1] for e0, e1 in zip(edge_ends[0], edge_ends[1])]
 
 	# Make adjacency matrix symmetric. 
 	tree_adjmat = tree_adjmat + tree_adjmat.T
+	# These are the edge ends. 
+	edge_ends = np.where(np.tril(tree_adjmat).T == True)
+	edge_list = [_edge_id_from_node_ids[e0,e1] for e0, e1 in zip(edge_ends[0], edge_ends[1])]
 
 	# Also create a sliced matrix, only from the visited nodes. 
 	_sliced = tree_adjmat[node_list,:][:,node_list]
@@ -2036,9 +2059,6 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 	'''
 	n_nodes = adj_mat.shape[0]
 
-	if max_length == -1:
-		max_length = n_nodes + 1
-
 	# Parallel processing: find longest cycle for every node independently
 	#    as these operations do not interact with each other, for different nodes. 
 	n_cores = np.min([n_nodes, cpu_count() - 1])
@@ -2073,36 +2093,56 @@ def _dfs_cycle(_in):
 	root       = _in[1]
 	max_length = _in[2]
 	
+	# Number of nodes in the graph. 
 	n_nodes = adj_mat.shape[0]
 
+	# Whether we have a visited a node or not. 
 	visited = np.zeros(n_nodes, dtype=np.bool)
 	visited[root] = True
 
+	# The stack used for depth-first search. 
 	stack = [[root, [root], visited]]
 
+	# Stores the current longest cycle. 
 	longest_cycle = []
 
+	# Depth first search. 
 	while len(stack) > 0:
+		# The current node we are working on. 
 		cur_node    = stack[0][0]
 		cur_path    = stack[0][1]
 		cur_visited = stack[0][2]
 
+		# Pop the top-most node in the stack. 
 		stack = stack[1:]
 
 		if len(cur_path) > max_length:
 			continue
-
+	
+		# Retrieve all neighbours of cur_node. Exclude the ones that 
+		#    have already been visite, save the root, because we are explicitly
+		#    looking for cycles containing the root. 
 		neighs = np.where(adj_mat[cur_node,:] == True)[0]
 		neighs = filter(lambda x: not cur_visited[x] or x == root, neighs)
 
 		for _n in neighs:
+			# If one of the neighbours is a root, we have found a cycle. 
 			if _n == root:
-				if len(cur_path) > 2 and len(cur_path) <= max_length and len(cur_path) > len(longest_cycle):
+				# Update our longest cycle if this one is longer than longest_cycle. 
+				if len(cur_path) > 2 and len(cur_path) > len(longest_cycle):
 					longest_cycle = cur_path
+					# If we already have a cycle of length max_length, there is no need
+					#    to keep looking for a new cycle. 
+					if len(cur_path) == max_length:
+						return longest_cycle
 			elif _n not in cur_path:
+				# Create path and visited variables for the next node. 
 				_n_visited = np.zeros_like(cur_visited)
 				_n_visited[:] = cur_visited[:]
+				# Only _n is set to True in this version of visited, as the other neighbours of
+				#    cur_node have not been visited yet. 
 				_n_visited[_n] = True
+				# Push this node into the stack, with its corresponding visited array and path. 
 				stack = [[_n, cur_path + [_n], _n_visited]] + stack
 
 	return longest_cycle
