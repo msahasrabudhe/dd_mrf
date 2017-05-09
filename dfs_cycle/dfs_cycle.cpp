@@ -23,7 +23,7 @@ vector<int> _dfs_cycle(__NPY_INT **adj_mat, int n_nodes, int root, int max_lengt
 	int          cur_node;
 	vector<int>  cur_path;
 	vector<bool> cur_visited;
-	state       cur_state;
+	state        cur_state;
 
 	/* Current required path and its length. */
 	vector<int> r_path;
@@ -70,41 +70,39 @@ vector<int> _dfs_cycle(__NPY_INT **adj_mat, int n_nodes, int root, int max_lengt
 		   on this branch. */
 		if(cur_path.size() > max_length)
 			continue;
+		
+		/* Check if the root is a neighbour of cur_node. If so, 
+		   we have found a cycle. */
+		if(adj_mat[cur_node][root] && cur_path.size() > 2)
+		{
+			/* We have found a cycle. */
+			if(cur_path.size() > r_length)
+			{
+				/* Update our longest cycle of length <= max_length. */
+				r_length = cur_path.size();
+				r_path   = cur_path;
+				/* If we find a cycle of longest permissible length, 
+				   return it, as there is no need to search more */
+				if(r_length == max_length)
+					return r_path;
+			}
+		}
 
 		/* Find the neighbours of cur_node. */
-		for(i = 0; i < n_nodes; i ++)
+		for(i = n_nodes - 1; i >= 0; i --)
 		{
-			if(adj_mat[cur_node][i])
+			if(adj_mat[cur_node][i] && !cur_visited[i])
 			{
-				/* i is a neighbour of cur_node. */
-				if(i == root && cur_path.size() > 2)
-				{
-					/* i is root. We have found a cycle. */
-					if(cur_path.size() > r_length)
-					{
-						/* Update our longest cycle of length <= max_length. */
-						r_length = cur_path.size();
-						r_path   = cur_path;
-						/* If we find a cycle of longest permissible length, 
-						   return it, as there is no need to search more */
-						if(r_length == max_length)
-							return r_path;
-					}
-				}
-				else if(!visited[i])
-				{
-					/* We haven't yet found a cycle. */
-					/* But we have found a node we haven't yet visited. */
-					n_state.node    = i;
-					n_state.path    = cur_path;
-					n_state.visited = cur_visited;
-					/* Update n_state.path and n_state.visited. */
-					n_state.path.push_back(i);
-					n_state.visited[i] = true;
-
+				/* We haven't yet found a cycle. */
+				/* But we have found a node we haven't yet visited. */
+				n_state.node    = i;
+				n_state.path    = cur_path;
+				n_state.visited = cur_visited;
+				/* Update n_state.path and n_state.visited. */
+				n_state.path.push_back(i);
+				n_state.visited[i] = true;
 					/* Push n_state into stack. */
-					s.push(n_state);
-				}
+				s.push(n_state);
 			}
 		}
 	}
@@ -136,7 +134,7 @@ dfs_cycle(PyObject *self, PyObject *args)
 	int dims[2];
 
 	/* Parse inputs. */
-	if (!PyArg_ParseTuple(args, "Odd", &adj_mat, &root, &max_length))
+	if (!PyArg_ParseTuple(args, "Oii", &adj_mat, &root, &max_length))
 		/* There was an error. */
 		return NULL;
 
@@ -153,6 +151,7 @@ dfs_cycle(PyObject *self, PyObject *args)
 	/* Get the pointer to the data array in adj_mat. */
 	c_adj_mat = int_npy_2darray_to_Carray(adj_mat);
 	
+	/* Get a cycle from the graph. */
 	l_cycle      = _dfs_cycle(c_adj_mat, n_nodes, root, max_length);
 	/* Get the length of the cycle. */
 	dims[0]      = l_cycle.size();
@@ -175,7 +174,7 @@ dfs_cycle(PyObject *self, PyObject *args)
 }
 
 static PyMethodDef DFSCycleMethods[] = {
-	{"find_cycle", dfs_cycle, METH_VARARGS, "Use depth-first search to find a cycle in a graph with a maximum given length."},
+	{"find_cycle", dfs_cycle, METH_VARARGS, "find_cycle(adj_mat, root, max_depth).\nUse depth-first search to find a cycle in a graph with a maximum given length."},
 	{NULL, NULL, 0, NULL}
 };
 

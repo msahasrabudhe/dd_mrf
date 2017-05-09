@@ -17,6 +17,9 @@ import bp
 
 # Fast cycle solver. Wang and Koller, ICML 2013.
 import fast_cycle_solver as fsc
+		
+# C++ implememtation of DFS cycle searching. 
+from dfs_cycle import find_cycle
 
 
 # The dtype to use to store energies. 
@@ -755,7 +758,7 @@ class Graph:
 
 
 
-	def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', max_depth=2, _momentum=0.0, _verbose=True, slave_list=None):
+	def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', max_depth=2, _momentum=0.0, slave_list=None, _verbose=True, _resume=False):
 		'''
 		Graph.optimise(): Optimise the set energies over the graph and return a labelling. 
 
@@ -779,99 +782,101 @@ class Graph:
 		where \\nabla g_t is the subgradient of the dual at iteration t. 
 		'''
 
-		# Check if a permissible decomposition is used. 
-		if decomposition not in decomposition_types:
-			print 'Permissible values for decomposition are \'tree\', and \'custom\' .'
-			print 'Custom decomposition must be specified in the form of a list of slaves if \'custom\' is chosen.'
-			raise ValueError
-
-		# Check if a permissible strategy is being used. 
-		if strategy not in ['step', 'step_ss', 'step_sg', 'adaptive', 'adaptive_d']:
-			print 'Permissible values for strategy are \'step\', \'step_sg\', \'adaptive\', and \'adaptive_d\''
-			print '\'step\'        Use diminshing step-size rule: a_t = a_start/sqrt(it).'
-			print '\'step_ss\'     Use a square summable but not summable sequence: a_t = a_start/(1.0 + t).'
-			print '\'step_sg\'     Use subgradient in combination with diminishing step-size rule: a_t = a_start/(sqrt(it)*||dg||**2).'
-			print '\'adaptive\'    Use adaptive rule given by the difference between the estimated PRIMAL cost and the current DUAL cost: a_t = a_start*(PRIMAL_t - DUAL_t)/||dg||**2.'
-			print '\'adaptive_d\'  Use adaptive rule with diminishing step-size rule: a_t = a_start*(PRIMAL_t - DUAL_t)/(sqrt(it)*||dg||**2).'
-			raise ValueError
-		# If strategy is adaptive, we would like a_start to be in (0, 2).
-		if strategy is 'adaptive' and (a_start <= 0 or a_start > 2):
-			print 'Please use 0 < a_start < 2 for an adaptive strategy.'
-			raise ValueError
-
-		# Momentum must be in [0, 1)
-		if _momentum < 0 or _momentum >= 1:
-			print 'Momentum must be in [0, 1).'
-			raise ValueError
-
-		# First check if the graph is complete. 
-		if not self.check_completeness():
-			n_list = np.where(self.node_flags == False)
-			print 'Graph.optimise(): The graph is not complete.'
-			print 'The following nodes are not set:', n_list
-			raise AssertionError
-
-		# Trim edge energies and the E - > V x V map.
-		self.edge_energies			= self.edge_energies[:self.n_edges,:,:]
-		self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self.n_edges,:]
-
-		# Set the optimisation strategy. 
-		self._optim_strategy = strategy
-
-		self.decomposition = decomposition
-
-		_naive_search = False
-
-		# Find the least "step" size in energy. This is given by the smallest difference
-		#   between any two energy energies in the Graph. 
-		# TODO HACK: If the difference between primal and dual energies at 
-		#   an iteration is smaller than this step size, we can safely 
-		#   perform a naive search on the conflicting nodes, and choose the smallest
-		#   energy. 
-		_all_ergs = np.concatenate((self.node_energies.flatten(), self.edge_energies.flatten()))
-		_all_ergs = np.unique(_all_ergs)
-		_erg_difs = [np.abs(_all_ergs[i] - _all_ergs[i+1]) for i in range(_all_ergs.size-1)]
-		_erg_step = np.min(_erg_difs)
-		self._erg_step = _erg_step
-
-		# Create slaves. This creates a list of slaves and stores it in 
-		# 	self.slave_list. The numbering of the slaves starts from the top-left,
-		# 	and continues in row-major fashion. For example, there are 
-		#   (self.rows-1)*(self.cols-1) slaves if the 'cell' decomposition is used. 
-		self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
-
-		# Create update variables for slaves. Created once, reset to zero each time
-		#   _apply_param_updates() is called. 
-		self._slave_node_up	= np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels))
-		self._slave_edge_up	= np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels, self.max_n_labels))
-		# Create a copy of these to hold the previous state update. Akin to momentum
-		#   update used in NNs. 
-		self._prv_node_sg   = np.zeros_like(self._slave_node_up)
-		self._prv_edge_sg   = np.zeros_like(self._slave_edge_up)
-		# Array to mark slaves for updates. 
-		# The first row corresponds to node updates, while the second to edge updates. 
-		self._mark_sl_up	= np.zeros((2,self.n_slaves), dtype=np.bool)
-
-		# How much momentum to use. Must be in [0, 1)
-		self._momentum = _momentum
+		# If resume, resume previous optimisation. 
+		if not _resume:
+			# Check if a permissible decomposition is used. 
+			if decomposition not in decomposition_types:
+				print 'Permissible values for decomposition are \'tree\', and \'custom\' .'
+				print 'Custom decomposition must be specified in the form of a list of slaves if \'custom\' is chosen.'
+				raise ValueError
 	
-		# Whether converged or not. 
-		converged = False
+			# Check if a permissible strategy is being used. 
+			if strategy not in ['step', 'step_ss', 'step_sg', 'adaptive', 'adaptive_d']:
+				print 'Permissible values for strategy are \'step\', \'step_sg\', \'adaptive\', and \'adaptive_d\''
+				print '\'step\'        Use diminshing step-size rule: a_t = a_start/sqrt(it).'
+				print '\'step_ss\'     Use a square summable but not summable sequence: a_t = a_start/(1.0 + t).'
+				print '\'step_sg\'     Use subgradient in combination with diminishing step-size rule: a_t = a_start/(sqrt(it)*||dg||**2).'
+				print '\'adaptive\'    Use adaptive rule given by the difference between the estimated PRIMAL cost and the current DUAL cost: a_t = a_start*(PRIMAL_t - DUAL_t)/||dg||**2.'
+				print '\'adaptive_d\'  Use adaptive rule with diminishing step-size rule: a_t = a_start*(PRIMAL_t - DUAL_t)/(sqrt(it)*||dg||**2).'
+				raise ValueError
+			# If strategy is adaptive, we would like a_start to be in (0, 2).
+			if strategy is 'adaptive' and (a_start <= 0 or a_start > 2):
+				print 'Please use 0 < a_start < 2 for an adaptive strategy.'
+				raise ValueError
+	
+			# Momentum must be in [0, 1)
+			if _momentum < 0 or _momentum >= 1:
+				print 'Momentum must be in [0, 1).'
+				raise ValueError
+	
+			# First check if the graph is complete. 
+			if not self.check_completeness():
+				n_list = np.where(self.node_flags == False)
+				print 'Graph.optimise(): The graph is not complete.'
+				print 'The following nodes are not set:', n_list
+				raise AssertionError
+	
+			# Trim edge energies and the E - > V x V map.
+			self.edge_energies			= self.edge_energies[:self.n_edges,:,:]
+			self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self.n_edges,:]
+	
+			# Set the optimisation strategy. 
+			self._optim_strategy = strategy
+	
+			self.decomposition = decomposition
+	
+			# Find the least "step" size in energy. This is given by the smallest difference
+			#   between any two energy energies in the Graph. 
+			# TODO HACK: If the difference between primal and dual energies at 
+			#   an iteration is smaller than this step size, we can safely 
+			#   perform a naive search on the conflicting nodes, and choose the smallest
+			#   energy. 
+#			_all_ergs = np.concatenate((self.node_energies.flatten(), self.edge_energies.flatten()))
+#			_all_ergs = np.unique(_all_ergs)
+#			_erg_difs = [np.abs(_all_ergs[i] - _all_ergs[i+1]) for i in range(_all_ergs.size-1)]
+#			_erg_step = np.min(_erg_difs)
+#			self._erg_step = _erg_step
+	
+			# Create slaves. This creates a list of slaves and stores it in 
+			# 	self.slave_list. The numbering of the slaves starts from the top-left,
+			# 	and continues in row-major fashion. For example, there are 
+			#   (self.rows-1)*(self.cols-1) slaves if the 'cell' decomposition is used. 
+			self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
+	
+			# Create update variables for slaves. Created once, reset to zero each time
+			#   _apply_param_updates() is called. 
+			self._slave_node_up	= np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels))
+			self._slave_edge_up	= np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels, self.max_n_labels))
+			# Create a copy of these to hold the previous state update. Akin to momentum
+			#   update used in NNs. 
+			self._prv_node_sg   = np.zeros_like(self._slave_node_up)
+			self._prv_edge_sg   = np.zeros_like(self._slave_edge_up)
+			# Array to mark slaves for updates. 
+			# The first row corresponds to node updates, while the second to edge updates. 
+			self._mark_sl_up	= np.zeros((2,self.n_slaves), dtype=np.bool)
+	
+			# How much momentum to use. Must be in [0, 1)
+			self._momentum = _momentum
+		
+			# Set all slaves to be solved at first. 
+			self._slaves_to_solve	= np.arange(self.n_slaves)
+	
+			# Two lists to record the primal and dual cost progression
+			self.dual_costs			= []
+			self.primal_costs		= []
+			self.subgradient_norms	= []
+	
+			self._best_primal_cost	= np.inf
+			self._best_dual_cost	= -np.inf
 
 		# The iteration
 		it = 1
 
-		# Set all slaves to be solved at first. 
-		self._slaves_to_solve	= np.arange(self.n_slaves)
-
-		# Two lists to record the primal and dual cost progression
-		self.dual_costs			= []
-		self.primal_costs		= []
-		self.subgradient_norms	= []
-
-		self._best_primal_cost	= np.inf
-		self._best_dual_cost	= -np.inf
-
+		# Whether converged or not. 
+		converged = False
+	
+		_naive_search = False
+	
 		# Loop till not converged. 
 		while not converged and it <= max_iter:
 			if _verbose:
@@ -2064,10 +2069,12 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 	n_cores = np.min([n_nodes, cpu_count() - 1])
 
 	# Create inputs: 
-	_inputs = [[adj_mat, _n, max_length] for _n in range(n_nodes)]
+	adj_mat_int = adj_mat.astype(np.int)
+	_inputs = [[adj_mat_int, _n, max_length] for _n in range(n_nodes)]
 
 	# Run the algorithm. 
-	list_cycles = Parallel(n_jobs=n_cores)(delayed(_dfs_cycle)(_in) for _in in _inputs)
+#	list_cycles = Parallel(n_jobs=n_cores)(delayed(dfs_cycle_)(_in) for _in in _inputs)
+	list_cycles = Parallel(n_jobs=n_cores)(delayed(find_cycle_)(_in) for _in in _inputs)
 
 	# Remove double cycles - cycles that have the same nodes, but in some other order. 
 	kept_cycles = [list_cycles[0]]
@@ -2084,7 +2091,14 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 	return kept_cycles
 
 # ---------------------------------------------------------------------------------------
-def _dfs_cycle(_in):
+def find_cycle_(_in):
+	'''
+	Handler function for dfs_cycle.find_cycle().
+	'''
+	return find_cycle(_in[0], _in[1], _in[2])
+
+# ---------------------------------------------------------------------------------------
+def dfs_cycle_(_in):
 	'''
 	Start DFS at root to find the longest cycle. Very expensive computation.
 	'''
