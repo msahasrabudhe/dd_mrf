@@ -758,7 +758,8 @@ class Graph:
 
 
 
-	def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', max_depth=2, _momentum=0.0, slave_list=None, _verbose=True, _resume=False):
+	def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', max_depth=2, \
+			_momentum=0.0, slave_list=None, _verbose=True, _resume=False, _create_slaves=True):
 		'''
 		Graph.optimise(): Optimise the set energies over the graph and return a labelling. 
 
@@ -816,7 +817,7 @@ class Graph:
 				print 'The following nodes are not set:', n_list
 				raise AssertionError
 	
-			# Trim edge energies and the E - > V x V map.
+			# Trim edge energies and the E -> V x V map.
 			self.edge_energies			= self.edge_energies[:self.n_edges,:,:]
 			self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self.n_edges,:]
 	
@@ -841,7 +842,8 @@ class Graph:
 			# 	self.slave_list. The numbering of the slaves starts from the top-left,
 			# 	and continues in row-major fashion. For example, there are 
 			#   (self.rows-1)*(self.cols-1) slaves if the 'cell' decomposition is used. 
-			self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
+			if _create_slaves:
+				self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
 	
 			# Create update variables for slaves. Created once, reset to zero each time
 			#   _apply_param_updates() is called. 
@@ -865,6 +867,9 @@ class Graph:
 			self.dual_costs			= []
 			self.primal_costs		= []
 			self.subgradient_norms	= []
+
+			# A list to record the number of disagreeing nodes at each iteration
+			self._n_miss_history    = []
 	
 			self._best_primal_cost	= np.inf
 			self._best_dual_cost	= -np.inf
@@ -892,7 +897,8 @@ class Graph:
 			# Get the primal cost at this iteration
 			primal_cost     = self._compute_primal_cost()
 			if self._best_primal_cost > primal_cost:
-				self._best_primal_cost = primal_cost
+				self._best_primal_cost     = primal_cost
+				self._best_primal_solution = self.labels
 			self.primal_costs += [primal_cost]
 
 			# Get the dual cost at this iteration
@@ -904,13 +910,15 @@ class Graph:
 			# Find the number of disagreeing points. 
 			disagreements = self._find_conflicts()
 
+			# Add to _n_miss_history
+			self._n_miss_history += [disagreements.size]
+
 			# Verify whether the algorithm has converged. If all slaves agree
 			#    on the labelling of every node, we have convergence. 
-			if self._check_consistency():
+			if disagreements.size == 0:
 				print 'Converged after %d iterations!\n' %(it)
 				print 'At convergence, PRIMAL = %.6f, DUAL = %.6f, Gap = %.6f.' %(primal_cost, dual_cost, primal_cost - dual_cost)
-				# Finally, assign labels.
-				self._assign_labels()
+#				self._assign_labels()			# Use this if you want to infer a PRIMAL solution from the final state of the slaves instead.
 				# Break from loop.
 				converged = True
 				break
@@ -1088,7 +1096,7 @@ class Graph:
 			_node_up	= ls_ - np.tile(ls_avg_, [n_slaves_nid, 1])
 	
 			# Find the node ID for n_id in each slave in s_ids. 
-			sl_nids = [self.slave_list[s].node_map[n_id] for s in s_ids]
+			sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
 	
 			# Mark this update to be done later. 
 			self._slave_node_up[s_ids, sl_nids, :self.n_labels[n_id]]  = _node_up #:self.n_labels[n_id]] = _node_up
@@ -1340,14 +1348,12 @@ class Graph:
 		Also computes the primal cost for the final labelling. 
 		'''
 		# Assign labels now. 
-		for n_id in range(self.n_nodes):
-			s_id				= self.nodes_in_slaves[n_id][0]
-			self.labels[n_id]	= self.slave_list[s_id].get_node_label(n_id)
+#		for n_id in range(self.n_nodes):
+#			s_id				= self.nodes_in_slaves[n_id][0]
+#			self.labels[n_id]	= self.slave_list[s_id].get_node_label(n_id)
+		self.labels      = self._get_primal_solution()
+		self.primal_cost = self._compute_primal_cost()
 
-		self.labels	= self.labels.astype(np.int)
-		# Compute primal cost. 
-		
-		self.primal_cost = self._compute_primal_cost(labels=self.labels)
 		return self.labels
 
 
@@ -1427,7 +1433,8 @@ class Graph:
 
 		# Generate a labelling first, if not specified. 
 		if labels is None:
-			labels	= self._get_primal_solution()
+			labels	    = self._get_primal_solution()
+			self.labels = labels
 
 		# Compute node comtributions.
 		for n_id in range(self.n_nodes):
