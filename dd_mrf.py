@@ -187,14 +187,21 @@ class Graph:
 		# An array to store the final labels. 
 		self.labels     = np.zeros(self.n_nodes)
 
-		# Set the number of edges to zero, as none have been added yet. 
-		# This number shall be gradually increased as edges are added. 
-		self.n_edges    = 0
+		# If n_edges is None, we set the number of edges to zero, else we set it to 
+		#   the maximum possible number, which is n_nodes*(n_nodes - 1)/2.
+		if n_edges is None:
+			self.n_edges = self.n_nodes*(self.n_nodes - 1)/2
+		else:
+			self.n_edges = n_edges
+
+		# self._current_edge_count is a variable that keeps track of the index where
+		#   every added edge is being inserted. 
+		self._current_edge_count = 0
 
 		# Create maps: V x V -> E and E -> V x V. 
 		# These give us the edge ID given two end-points, and vice-versa, respectively. 
 		self._edge_id_from_node_ids = np.zeros((self.n_nodes, self.n_nodes), dtype=np.int)
-		self._node_ids_from_edge_id = np.zeros((self.n_nodes*(self.n_nodes-1)/2, 2), dtype=np.int)
+		self._node_ids_from_edge_id = np.zeros((self.n_edges, 2), dtype=np.int)
 
 		# To set the maximum number of labels, we consider what kind of input is n_labels. 
 		# If n_labels is an integer, we assume that all nodes should get the same max_n_label.
@@ -210,11 +217,111 @@ class Graph:
 		self.node_energies  = np.zeros((self.n_nodes, self.max_n_labels))
 		# Initialise edge energies to allow for maximum number of possible edges. We 
 		#   can later trim this matrix. 
-		self.edge_energies  = np.zeros((self.n_nodes*(self.n_nodes-1)/2, self.max_n_labels, self.max_n_labels))
+		self.edge_energies  = np.zeros((self.n_edges, self.max_n_labels, self.max_n_labels))
 
 		# Flags set to ensure that node energies have been set. If any energies
 		# 	have not been set, we cannot proceed to optimisation as the graph is not complete. 
 		self.node_flags	    = np.zeros(self.n_nodes, dtype=np.bool)
+
+
+	def init_from_uai(self, uai_file):
+		# Read a .uai file and set parameters accordingly.
+		fuai = open(uai_file, 'r')
+
+		# Read the data into a variable
+		fdata = fuai.readlines()
+		# Remove whitespaces from each line.
+		fdata = [t.strip() for t in fdata]
+
+		# Remove empty lines. 
+		fdata = [t for t in fdata if t is not '']
+
+		# --- This is the start of the preamble ---
+		# The first line is type of network, which can be safely ignored. 
+
+		# The second line is the number of nodes in the graph.
+		n_nodes  = int(fdata[1])
+
+		# The next line is specifies cardinalities of all variables, separated
+		#   by spaces. 
+		n_labels = [int(t) for t in fdata[2].split(' ')]
+		
+		# The next line contains one integer: the number of factors. This 
+		#   number must be >= n_nodes, as all the nodes must have unaries. 
+		n_factor = int(fdata[3])
+		# DEBUG: We need to make sure that there are at least n_nodes factors.
+		try:
+			assert(n_factor >= n_nodes)
+		except AssertionError:
+			print 'The number of factors (%d) must be greater than or equal to',
+			print 'the number of nodes (%d).' %(n_factor, n_nodes)
+			return
+
+		# We assume that the 1st order factors appear first, followed by the 2nd order factors.
+		# The number of edges is then n_factor minus n_edges. 
+		n_edges  = n_factor - n_nodes
+
+		# We are currently at line ...
+		c_line   = 4
+
+		# The node order is obtained by the first n_nodes lines.
+		node_list = [int(t.split(' ')[-1]) for t in fdata[c_line:c_line+n_nodes]
+
+		# We are currently at line ...
+		c_line   = c_line + n_nodes
+
+		# After the first n_nodes lines, the next n_edges lines specify edges. 
+		edge_list = [[int(i) for i in t.split(' ')][1:] for t in fdata[c_line:c_line+n_edges]]
+
+		# Call __init__ with n_nodes and n_labels.
+		self.__init__(n_nodes, n_labels)
+		
+
+		# --- This is the end of the preamble ---
+		# --- Next we move to function tables ---
+
+		# Each factor is represented by giving the full table. 
+
+		# Read node energies first.
+		for i in range(n_nodes):
+			this_node = node_list[i]
+			# The first line is the number of labels for this factor. It must coincide with the 
+			#   the number of labels for the factor it corresponds to in the model.
+			n_labels_this_node = int(fdata[c_line])
+			try:
+				assert(n_labels_this_node == n_labels[this_node])
+			except:
+				print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels',
+				print 'in the preamble (%d).' %(i, n_labels_this_node, n_labels[this_node])
+				return
+
+			# Read this node's energies in the next line.
+			node_energies = [np.float32(x) for x in fdata[c_line+1].split(' ')]
+			# Set the node energies.
+			self.set_node_energies(this_node, node_energies)
+			# Increment c_line
+			c_line = c_line + 2
+	
+		# Read edge energies now.
+		for e in range(n_edges):
+			# The edge ends for this factor. 
+			eend0, eend1 = edge_list[e]
+			# The first line is the number of labels for this factor. It must coincide with the 
+			#   the number of labels for the factor it corresponds to in the model.
+			n_labels_this_edge = int(fdata[c_line])
+			try:
+				assert(n_labels_this_edge = n_labels[eend0]*n_labels[eend1])
+			except AssertionError:
+				print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels',
+				print 'in the preamble (%d).' %(e+n_nodes, n_labels_this_edge, n_labels[eend0]*n_labels[eend1])
+				return
+
+			# Read this edge's energies in the next n_labels[eend0] lines. 
+			edge_energies = [[np.float32(x) for x in t.split(' ')] for t in fdata[c_line+1:c_line+1+n_labels[eend0]]]
+			# Set the edge energies.
+			self.set_edge_energies(eend0, eend1, edge_energies)
+			# Increment c_line
+			c_line = c_line + 1 + n_labels[eend0]
 
 
 	def set_node_energies(self, i, energies):
@@ -271,8 +378,8 @@ class Graph:
                          %(energies.shape[0], energies.shape[1], self.n_labels[i], self.n_labels[j])
 			raise ValueError
 
-		# edge_id is the self.n_edges. 
-		edge_id = self.n_edges
+		# edge_id is the self._current_edge_count
+		edge_id = self._current_edge_count
 
 		# Make assignment: set the edge energies. 
 		self.edge_energies[edge_id, 0:self.n_labels[i], 0:self.n_labels[j]]  = energies
@@ -285,7 +392,7 @@ class Graph:
 		self._node_ids_from_edge_id[edge_id,:] = [i,j]
 
 		# Increment the number of edges. 
-		self.n_edges += 1
+		self._current_edge_count += 1
 
 
 	def check_completeness(self):
@@ -818,8 +925,8 @@ class Graph:
 				raise AssertionError
 	
 			# Trim edge energies and the E -> V x V map.
-			self.edge_energies			= self.edge_energies[:self.n_edges,:,:]
-			self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self.n_edges,:]
+			self.edge_energies			= self.edge_energies[:self._current_edge_count,:,:]
+			self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self._current_edge_count,:]
 	
 			# Set the optimisation strategy. 
 			self._optim_strategy = strategy
