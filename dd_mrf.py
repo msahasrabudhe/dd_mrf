@@ -21,12 +21,11 @@ import fast_cycle_solver as fsc
 # C++ implememtation of DFS cycle searching. 
 from dfs_cycle import find_cycle
 
-
 # The dtype to use to store energies. 
 e_dtype = np.float64
 
 # List of slave types handled by this module. 
-slave_types         = ['cell', 'tree', 'cycle']
+slave_types         = ['free_node', 'cell', 'tree', 'cycle']
 # List of allowed graph decompositions.
 decomposition_types = ['tree', 'mixed', 'custom']
 
@@ -140,6 +139,10 @@ class Slave:
 			return _optimise_tree(self)
 		elif self.struct == 'cycle':
 			return _optimise_cycle(self)
+		elif self.struct == 'free_node':
+			# Simply return the label with the least energy.
+			nl = np.argmin(self.node_energies)
+			return [nl], self.node_energies[0,nl]
 		else:
 			print 'Slave struct not recognised: %s.' %(self.struct)
 			raise ValueError
@@ -155,6 +158,8 @@ class Slave:
 			self._energy	= _compute_tree_slave_energy(self.node_energies, self.edge_energies, self.labels, self.graph_struct)
 		elif self.struct == 'cycle':
 			self._energy    = _compute_cycle_slave_energy(self.node_energies, self.edge_energies, self.labels, self.node_list)
+		elif self.struct == 'free_node':
+			self._energy    = self.node_energies[0, self.labels[0]]
 		else:
 			print 'Slave struct not recognised: %s.' %(self.struct)
 			raise ValueError
@@ -173,11 +178,16 @@ class Graph:
 	them according to the DD-MRF algorithm. 
 	'''
 
-	def __init__(self, n_nodes, n_labels):
+	def __init__(self, n_nodes=None, n_labels=None, n_edges=None, init_from_uai=None):
 		'''
 		Graph.__init__(): Initialise the graph to be of shape (rows, cols), with 
                             a node taking a maximum of n_labels. 
 		'''
+		# If init_from_uai is set, call self._init_from_uai
+		if init_from_uai is not None:
+			self._init_from_uai(init_from_uai)
+			return
+
 		# The rows, columns, and node indexing. 
 		self.n_nodes    = n_nodes
 
@@ -224,12 +234,15 @@ class Graph:
 		self.node_flags	    = np.zeros(self.n_nodes, dtype=np.bool)
 
 
-	def init_from_uai(self, uai_file):
+	def _init_from_uai(self, uai_file):
 		# Read a .uai file and set parameters accordingly.
 		fuai = open(uai_file, 'r')
 
 		# Read the data into a variable
 		fdata = fuai.readlines()
+		# Close fuai. We don't need it anymore.
+		fuai.close()
+
 		# Remove whitespaces from each line.
 		fdata = [t.strip() for t in fdata]
 
@@ -265,7 +278,7 @@ class Graph:
 		c_line   = 4
 
 		# The node order is obtained by the first n_nodes lines.
-		node_list = [int(t.split(' ')[-1]) for t in fdata[c_line:c_line+n_nodes]
+		node_list = [int(t.split(' ')[-1]) for t in fdata[c_line:c_line+n_nodes]]
 
 		# We are currently at line ...
 		c_line   = c_line + n_nodes
@@ -274,8 +287,10 @@ class Graph:
 		edge_list = [[int(i) for i in t.split(' ')][1:] for t in fdata[c_line:c_line+n_edges]]
 
 		# Call __init__ with n_nodes and n_labels.
-		self.__init__(n_nodes, n_labels)
-		
+		self.__init__(n_nodes=n_nodes, n_labels=n_labels, n_edges=n_edges, init_from_uai=None)
+
+		# We are currently at line ...
+		c_line = c_line + n_edges
 
 		# --- This is the end of the preamble ---
 		# --- Next we move to function tables ---
@@ -310,18 +325,30 @@ class Graph:
 			#   the number of labels for the factor it corresponds to in the model.
 			n_labels_this_edge = int(fdata[c_line])
 			try:
-				assert(n_labels_this_edge = n_labels[eend0]*n_labels[eend1])
+				assert(n_labels_this_edge == n_labels[eend0]*n_labels[eend1])
 			except AssertionError:
-				print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels',
-				print 'in the preamble (%d).' %(e+n_nodes, n_labels_this_edge, n_labels[eend0]*n_labels[eend1])
+				print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels' %(e+n_nodes, n_labels_this_edge),
+				print 'in the preamble (%d).' %(n_labels[eend0]*n_labels[eend1])
 				return
 
-			# Read this edge's energies in the next n_labels[eend0] lines. 
-			edge_energies = [[np.float32(x) for x in t.split(' ')] for t in fdata[c_line+1:c_line+1+n_labels[eend0]]]
+			# Update c_line
+			c_line = c_line + 1
+
+			# Read this edge's energies. It is the next n_labels[eend0]*n_labels[eend1] elements, as linebreaks
+			#   don't count for anything. 
+			n_elements    = 0
+			edge_energies = []
+			while n_elements != n_labels[eend0]*n_labels[eend1]:
+				_next         =  [np.float32(x) for x in fdata[c_line].split(' ')]
+				n_elements    += len(_next)
+				edge_energies += _next
+				c_line        =  c_line + 1
+			# Reshape the array
+			edge_energies = np.array(edge_energies, dtype=e_dtype).reshape(n_labels[eend0], n_labels[eend1])
+
+#			edge_energies = [[np.float32(x) for x in t.split(' ')] for t in fdata[c_line+1:c_line+1+n_labels[eend0]]]
 			# Set the edge energies.
 			self.set_edge_energies(eend0, eend1, edge_energies)
-			# Increment c_line
-			c_line = c_line + 1 + n_labels[eend0]
 
 
 	def set_node_energies(self, i, energies):
@@ -352,22 +379,26 @@ class Graph:
 		function first checks for the possibility of an edge between i and j, 
 		and makes the assignment only if such an edge is possible.
 		'''
-		# Convention: one can only specify edges from a lower index to a higher index. 
-		if j < i: 
-			print 'Graph.set_edge_energies(): Please specify indices from a lower index to higher index. %d > %d here.' %(i, j)
-			raise ValueError
-
 		# Check that indices are not out of range. 
 		if i >= self.n_nodes or j >= self.n_nodes or i < 0 or j < 0:
 			print 'Graph.set_edge_energies(): At least one of the supplied edge indices is invalid (not in [0, n_nodes)).'
 			raise IndexError
 
+		# Convert the energy to a numpy array
+		energies = np.array(energies, dtype=e_dtype)
+
+		# Convention: one can only have edges from a lower index to a higher index. 
+		# If specified energies do not conform, swap i and j, and transpose energies.
+		if j < i:
+			energies = energies.T
+			i, j     = j, i
+#		if j < i: 
+#			print 'Graph.set_edge_energies(): Please specify indices from a lower index to higher index. %d > %d here.' %(i, j)
+#			raise ValueError
+
 		# Convert indices to int, just in case ...
 		i = np.int(i)
 		j = np.int(j)
-
-		# Convert the energy to a numpy array
-		energies = np.array(energies, dtype=e_dtype)
 
 		# Check that the supplied energy has the correct shape. 
 		input_shape		= list(energies.shape)
@@ -506,15 +537,21 @@ class Graph:
 		self._max_edges_in_slave = 0
 
 		# Create adjacency matrices. 
-		subtree_data = self._generate_trees_greedy()
+		subtree_data = self._generate_trees_greedy(max_depth=max_depth)
+
+		# Create free_node slaves: these contain nodes that do not have
+		#    any edges incident on them. 
+		free_nodes    = np.where(np.sum(self.adj_mat,axis=1) == 0)[0]
 
 		# The number of slaves
-		self.n_slaves = len(subtree_data)
+		n_trees       = len(subtree_data)
+		n_free_nodes  = free_nodes.size
+		self.n_slaves = n_trees + n_free_nodes
 		# The list of slaves.
 		self.slave_list = np.array([Slave() for i in range(self.n_slaves)])
 
 		# Create each slave now. 
-		for s_id in range(self.n_slaves):
+		for s_id in range(n_trees):
 			# Extract the adjacency matrices for this slave. 
 			tree_adj  = subtree_data[s_id][0]
 			node_list = np.array(subtree_data[s_id][1], dtype=np.int)
@@ -557,6 +594,42 @@ class Graph:
 			for e_id in edge_list:
 				self.edges_in_slaves[e_id] += [s_id]
 
+		# Make slaves for free nodes now. 
+		for s_id in range(n_trees, self.n_slaves):
+			# ID of this free node. 
+			fn_id = s_id - n_trees
+
+			# Node id corresponding to this free node
+			n_id  = free_nodes[fn_id]
+
+			# Create its node list
+			node_list = np.array([n_id])
+			# Edge list is empty
+			edge_list = np.array([])
+
+			# Create n_labels
+			n_labels  = np.array([self.n_labels[n_id]])
+
+			# Create its node energies
+			node_energies    = np.zeros([1, n_labels[0]])
+			node_energies[:] = self.node_energies[n_id, :n_labels[0]]
+
+			# There are no edge energies. 
+			edge_energies    = np.array([])
+
+			# There is no graph struct
+			graph_struct     = None
+
+			# Set slave parameters. 
+			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+					edge_energies, graph_struct, 'free_node')
+
+			# Add this slave to the lists of nodes and edges in node_list and edge_list
+			for n_id in node_list:
+				self.nodes_in_slaves[n_id] += [s_id]
+			for e_id in edge_list:
+				self.edges_in_slaves[e_id] += [s_id]
+
 		# For convenience, make elements of self.nodes_in_slaves, and self.edges_in_slaves into
 		# Numpy arrays. 
 		self.nodes_in_slaves = [np.array(t) for t in self.nodes_in_slaves]
@@ -564,7 +637,7 @@ class Graph:
 		# C'est ca.
 
 
-	def _create_mixed_slaves(self, max_length=6):
+	def _create_mixed_slaves(self, max_length=4):
 		'''
 		Create mixed slaves. 
 		This algorithm tries to find a small cycle for every node, i.e., it 
@@ -635,18 +708,31 @@ class Graph:
 				adj_mat[c_n[i0], c_n[i1]] = False
 				adj_mat[c_n[i1], c_n[i0]] = False
 
+		# We would like each tree to have at most a quarter of the
+		#    total nodes in the graph. The depth is hence set as 
+		#    1 + log of self.n_nodes/4 to a base equal to the average node
+		#    node degree of the graph, rounded to the nearest integer. 
+		avg_degree   = np.mean(self.adj_mat)*self.n_nodes
+		_max_depth_t = np.log(self.n_nodes/4.0)/avg_degree
+
 		# Now find trees in the remaining adjacency matrix. 
-		subtree_data = self._generate_trees_greedy(adjacency=adj_mat)
+		subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=2)		# Just using 2 for now. 
+
+		# Finally, add any nodes that do not have any edges connected to them, 
+		#    and place them in slaves of their own. 
+		free_nodes    = np.where(np.sum(self.adj_mat,axis=1) == 0)[0]
 
 		# The number of slaves is the length of cycles plus the length of subtree_data
 		n_cycles      = len(cycles)
-		self.n_slaves = len(cycles) + len(subtree_data) 
+		n_trees       = len(subtree_data)
+		n_free_nodes  = free_nodes.size
+		self.n_slaves = n_cycles + n_trees + n_free_nodes
 
 		# Create slave list. 
 		self.slave_list = [Slave() for s in range(self.n_slaves)]
 
 		# Make cycle slaves first. 
-		for s_id in range(len(cycles)):
+		for s_id in range(n_cycles):
 			# The current cycle. 
 			c_n = cycles[s_id]
 
@@ -658,7 +744,7 @@ class Graph:
 			n_nodes   = node_list.size
 			n_edges   = edge_list.size
 
-			for i in range(len(c_n)):
+			for i in range(node_list.size):
 				e0, e1       = node_list[i], node_list[(i+1)%n_nodes]
 				e_id         = self._edge_id_from_node_ids[e0, e1]
 				edge_list[i] = e_id
@@ -722,7 +808,7 @@ class Graph:
 				self.edges_in_slaves[e_id] += [s_id]
 
 		# Now make tree slaves. 
-		for s_id in range(n_cycles, self.n_slaves):
+		for s_id in range(n_cycles, n_cycles + n_trees):
 			# Tree ID is n_cycles less than s_id. 
 			t_id      = s_id - n_cycles
 
@@ -797,6 +883,43 @@ class Graph:
 				self.nodes_in_slaves[n_id] += [s_id]
 			for e_id in edge_list:
 				self.edges_in_slaves[e_id] += [s_id]
+
+		# Make slaves for free nodes now. 
+		for s_id in range(n_cycles + n_trees, self.n_slaves):
+			# ID of this free node. 
+			fn_id = s_id - n_cycles - n_trees
+
+			# Node id corresponding to this free node
+			n_id  = free_nodes[fn_id]
+
+			# Create its node list
+			node_list = np.array([n_id])
+			# Edge list is empty
+			edge_list = np.array([])
+
+			# Create n_labels
+			n_labels  = np.array([self.n_labels[n_id]])
+
+			# Create its node energies
+			node_energies    = np.zeros([1, n_labels[0]])
+			node_energies[:] = self.node_energies[n_id, :n_labels[0]]
+
+			# There are no edge energies. 
+			edge_energies    = np.array([])
+
+			# There is no graph struct
+			graph_struct     = None
+
+			# Set slave parameters. 
+			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+					edge_energies, graph_struct, 'free_node')
+
+			# Add this slave to the lists of nodes and edges in node_list and edge_list
+			for n_id in node_list:
+				self.nodes_in_slaves[n_id] += [s_id]
+			for e_id in edge_list:
+				self.edges_in_slaves[e_id] += [s_id]
+
 
 		# For convenience, make elements of self.nodes_in_slaves, and self.edges_in_slaves into
 		# Numpy arrays. 
@@ -927,6 +1050,9 @@ class Graph:
 			# Trim edge energies and the E -> V x V map.
 			self.edge_energies			= self.edge_energies[:self._current_edge_count,:,:]
 			self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self._current_edge_count,:]
+			
+			# Reset self.n_edges to _current_edge_count.
+			self.n_edges = self._current_edge_count
 	
 			# Set the optimisation strategy. 
 			self._optim_strategy = strategy
@@ -1364,7 +1490,7 @@ class Graph:
 
 		return _outputs
 
-	def _generate_trees_greedy(self, adjacency=None):
+	def _generate_trees_greedy(self, adjacency=None, max_depth=-1):
 		'''
 		Generate trees in a greedy manner. The aim is to greedily generate trees starting at the first
 		node, so that each tree is as large as possible, and we can skip as many nodes for root as possible. 
@@ -1379,8 +1505,9 @@ class Graph:
 			adj_mat_copy = np.zeros_like(adjacency)
 			adj_mat_copy[:] = adjacency[:]
 
-		# Set the max_depth to n_nodes, so that the maximum possible tree is discovered every time. 
-		max_depth = n_nodes
+		# Set the max_depth to n_nodes if it is -1, so that the maximum possible tree is discovered every time. 
+		if max_depth == -1:
+			max_depth = n_nodes
 
 		subtrees_data = []
 		for i in range(n_nodes):
@@ -1917,6 +2044,9 @@ def _optimise_slave(s):
 		return _optimise_tree(s)
 	elif s.struct == 'cycle':
 		return _optimise_cycle(s)
+	elif s.struct == 'free_node':
+		nl = np.argmin(s.node_energies)
+		return [nl], s.node_energies[0,nl]
 	else:
 		print 'Slave structure not recognised: %s.' %(s.struct)
 		raise ValueError
@@ -2191,11 +2321,17 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 	list_cycles = Parallel(n_jobs=n_cores)(delayed(find_cycle_)(_in) for _in in _inputs)
 
 	# Remove double cycles - cycles that have the same nodes, but in some other order. 
-	kept_cycles = [list_cycles[0]]
-	for c_n in list_cycles[1:]:
+	kept_cycles = []
+	for c_n in list_cycles:
+		# Do not include a failed search.
+		if len(c_n) == 0:
+			continue
+
+		# Whether we have already seen a cycle. 
 		_already_seen = False
 		for k_cn in kept_cycles:
 			if np.array_equal(np.sort(k_cn), np.sort(c_n)):
+				# This cycle has already been included. No need to include it again.
 				_already_seen = True
 				break
 		if not _already_seen:
