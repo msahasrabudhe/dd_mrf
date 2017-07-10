@@ -178,14 +178,14 @@ class Graph:
 	them according to the DD-MRF algorithm. 
 	'''
 
-	def __init__(self, n_nodes=None, n_labels=None, n_edges=None, init_from_uai=None):
+	def __init__(self, n_nodes=None, n_labels=None, n_edges=None, init_from_uai=None, _maximize=False):
 		'''
 		Graph.__init__(): Initialise the graph to be of shape (rows, cols), with 
                             a node taking a maximum of n_labels. 
 		'''
 		# If init_from_uai is set, call self._init_from_uai
 		if init_from_uai is not None:
-			self._init_from_uai(init_from_uai)
+			self._init_from_uai(init_from_uai, _maximize)
 			return
 
 		# The rows, columns, and node indexing. 
@@ -233,8 +233,12 @@ class Graph:
 		# 	have not been set, we cannot proceed to optimisation as the graph is not complete. 
 		self.node_flags	    = np.zeros(self.n_nodes, dtype=np.bool)
 
+		# Flag to determine whether the original model demands a maximisation. 
+		self._maximize      = False
+		self._max_pot       = None
 
-	def _init_from_uai(self, uai_file):
+
+	def _init_from_uai(self, uai_file, _maximize):
 		# Read a .uai file and set parameters accordingly.
 		fuai = open(uai_file, 'r')
 
@@ -349,6 +353,30 @@ class Graph:
 #			edge_energies = [[np.float32(x) for x in t.split(' ')] for t in fdata[c_line+1:c_line+1+n_labels[eend0]]]
 			# Set the edge energies.
 			self.set_edge_energies(eend0, eend1, edge_energies)
+
+		if _maximize:
+			# If _maximize is set, it means the original problem asks for argmax f(x). 
+			# However, this code solves an argmin problem. Hence, we convert the potentials
+			#    supplied in this file to energies by subtracting them from the 
+			#    maximum potential found in the model.
+			
+			# First, find the maximum potential in the model. 
+			_max_node_pot = np.max(self.node_energies)
+			_max_edge_pot = np.max(self.edge_energies)
+			_max_pot      = np.max([_max_node_pot, _max_edge_pot])
+			# Next, normalize the potentials so that they lie in [0, 1]
+			self.node_energies = self.node_energies/_max_pot
+			self.edge_energies = self.edge_energies/_max_pot
+			# Now, subtract these from 1. 
+			self.node_energies = 1.0 - self.node_energies
+			self.edge_energies = 1.0 - self.edge_energies
+
+			# This flag determines whether a potential is to be maximised. 
+			self._maximize     = True
+			self._max_pot      = _max_pot
+		else:
+			self._maximize     = False
+			self._max_pot      = None
 
 
 	def set_node_energies(self, i, energies):
@@ -1156,6 +1184,12 @@ class Graph:
 				converged = True
 				break
 
+#			# If we are supposed to actually maximize ...
+#			if self._maximize:
+#				# Number of factors in the graph. This is equal to the number
+#				#    of edges and the number of nodes. 
+#				n_factors   = self.n_edges + self.n_nodes
+#				primal_cost = n_factors*self._max_pot - primal_cost
 
 			# Test: #TODO
 			# If disagreements are less than or equal to 2, we do a brute force
