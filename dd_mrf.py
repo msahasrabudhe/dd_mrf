@@ -25,9 +25,9 @@ from dfs_cycle import find_cycle
 e_dtype = np.float64
 
 # List of slave types handled by this module. 
-slave_types         = ['free_node', 'cell', 'tree', 'cycle']
+slave_types         = ['free_node', 'free_edge', 'cell', 'tree', 'cycle']
 # List of allowed graph decompositions.
-decomposition_types = ['tree', 'mixed', 'custom']
+decomposition_types = ['tree', 'mixed', 'custom', 'factor']
 
 # Infinity energy. Deliberately introduced to skew primal and dual costs,
 #    so that it is easier to debug when optimisation is buggy. 
@@ -143,14 +143,31 @@ class Slave:
 			# Simply return the label with the least energy.
 			nl = np.argmin(self.node_energies)
 			return [nl], self.node_energies[0,nl]
+		elif self.struct == 'free_edge':
+			# Get all labellings of the two nodes involved. 
+			_labels = _generate_label_permutations(self.n_labels)
+			# First set of labels. 
+			lx, ly = _labels[0]
+			# Min energy so far ...
+			min_energy = self.node_energies[0,lx] + self.node_energies[1,ly] + self.edge_energies[0,lx,ly]
+			min_labels = [lx, ly]
+			# Find overall minimum energy. 
+			for [lx, ly] in _labels[1:]:
+				_energy = self.node_energies[0,lx] + self.node_energies[1,ly] + self.edge_energies[0,lx,ly]
+				if _energy < min_energy:
+					min_energy = _energy
+					min_labels = [lx, ly]
+			# Return the minimum energy. 
+			return min_labels, min_energy
+				
 		else:
 			print 'Slave struct not recognised: %s.' %(self.struct)
 			raise ValueError
 
 	def _compute_energy(self):
 		'''
-		Slave._compute_energy(): Computes the energy corresponding to
-								 the labels. 
+		Slave._compute_energy(): Computes the energy of this slave. Assumes that
+                                 we have already assigned labels to this slave. 
 		'''
 		if self.struct == 'cell':
 			self._energy	= _compute_4node_slave_energy(self.node_energies, self.edge_energies, self.labels)
@@ -160,6 +177,10 @@ class Slave:
 			self._energy    = _compute_cycle_slave_energy(self.node_energies, self.edge_energies, self.labels, self.node_list)
 		elif self.struct == 'free_node':
 			self._energy    = self.node_energies[0, self.labels[0]]
+		elif self.struct == 'free_edge':
+			self._energy    = self.node_energies[0,self.labels[0]] + \
+							  self.node_energies[1,self.labels[1]] + \
+							  self.edge_energies[0, self.labels[0], self.labels[1]]
 		else:
 			print 'Slave struct not recognised: %s.' %(self.struct)
 			raise ValueError
@@ -253,6 +274,9 @@ class Graph:
 		# Remove empty lines. 
 		fdata = [t for t in fdata if t is not '']
 
+		# The number of lines in the trimmed file. 
+		n_lines = len(fdata)
+
 		# --- This is the start of the preamble ---
 		# The first line is type of network, which can be safely ignored. 
 
@@ -265,97 +289,110 @@ class Graph:
 		
 		# The next line contains one integer: the number of factors. This 
 		#   number must be >= n_nodes, as all the nodes must have unaries. 
-		n_factor = int(fdata[3])
+		n_factors = int(fdata[3])
 		# DEBUG: We need to make sure that there are at least n_nodes factors.
 		try:
-			assert(n_factor >= n_nodes)
+			assert(n_factors >= n_nodes)
 		except AssertionError:
 			print 'The number of factors (%d) must be greater than or equal to',
-			print 'the number of nodes (%d).' %(n_factor, n_nodes)
+			print 'the number of nodes (%d).' %(n_factors, n_nodes)
 			return
-
-		# We assume that the 1st order factors appear first, followed by the 2nd order factors.
-		# The number of edges is then n_factor minus n_edges. 
-		n_edges  = n_factor - n_nodes
 
 		# We are currently at line ...
 		c_line   = 4
 
-		# The node order is obtained by the first n_nodes lines.
-		node_list = [int(t.split(' ')[-1]) for t in fdata[c_line:c_line+n_nodes]]
+		# Read the next n_factors lines, and store the order of factors. 
+		factor_order = [[int(x) for x in l.split(' ')] for l in fdata[c_line:c_line+n_factors]]
 
 		# We are currently at line ...
-		c_line   = c_line + n_nodes
+		c_line   = c_line + n_factors
 
-		# After the first n_nodes lines, the next n_edges lines specify edges. 
-		edge_list = [[int(i) for i in t.split(' ')][1:] for t in fdata[c_line:c_line+n_edges]]
+		# Calculate the number of nodes and edges. 
+		n_nodes  = reduce(lambda x, y: x + 1 if y[0] == 1 else x, factor_order, 0)
+		n_edges  = n_factors - n_nodes
 
 		# Call __init__ with n_nodes and n_labels.
 		self.__init__(n_nodes=n_nodes, n_labels=n_labels, n_edges=n_edges, init_from_uai=None)
-
-		# We are currently at line ...
-		c_line = c_line + n_edges
 
 		# --- This is the end of the preamble ---
 		# --- Next we move to function tables ---
 
 		# Each factor is represented by giving the full table. 
+		# We iterate over factor_order and depending on whether the factor is a node or an edge, 
+		#    we record the potentials/energies. 
+		for i in range(n_factors):
+			this_factor = factor_order[i]
+			
+			# If it is a node ... 
+			if this_factor[0] == 1:
+				this_node = this_factor[1]
+				# The first line is the number of labels for this factor. It must coincide with the 
+				#   the number of labels for the factor it corresponds to in the model.
+				n_labels_this_node = int(fdata[c_line])
 
-		# Read node energies first.
-		for i in range(n_nodes):
-			this_node = node_list[i]
-			# The first line is the number of labels for this factor. It must coincide with the 
-			#   the number of labels for the factor it corresponds to in the model.
-			n_labels_this_node = int(fdata[c_line])
-			try:
-				assert(n_labels_this_node == n_labels[this_node])
-			except:
-				print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels',
-				print 'in the preamble (%d).' %(i, n_labels_this_node, n_labels[this_node])
-				return
+				try:
+					assert(n_labels_this_node == n_labels[this_node])
+				except:
+					print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels' %(i, n_labels_this_node),
+					print 'in the preamble (%d).' %(n_labels[this_node])
+					return
 
-			# Read this node's energies in the next line.
-			node_energies = [np.float32(x) for x in fdata[c_line+1].split(' ')]
-			# Set the node energies.
-			self.set_node_energies(this_node, node_energies)
-			# Increment c_line
-			c_line = c_line + 2
+				# Update c_line
+				c_line = c_line + 1
 	
-		# Read edge energies now.
-		for e in range(n_edges):
-			# The edge ends for this factor. 
-			eend0, eend1 = edge_list[e]
-			# The first line is the number of labels for this factor. It must coincide with the 
-			#   the number of labels for the factor it corresponds to in the model.
-			n_labels_this_edge = int(fdata[c_line])
-			try:
-				assert(n_labels_this_edge == n_labels[eend0]*n_labels[eend1])
-			except AssertionError:
-				print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels' %(e+n_nodes, n_labels_this_edge),
-				print 'in the preamble (%d).' %(n_labels[eend0]*n_labels[eend1])
-				return
+				# Read this node's energies next. 
+				n_elements    = 0
+				node_energies = []
+				while n_elements != n_labels[this_node]:
+					_next         =  [np.float64(x) for x in fdata[c_line].split(' ')]
+					n_elements    += len(_next)
+					node_energies += _next
+					c_line        =  c_line + 1
+				# Set the node energies.
+				self.set_node_energies(this_node, node_energies)
 
-			# Update c_line
-			c_line = c_line + 1
+			# Else if it is an edge ...
+			elif this_factor[0] == 2:
+				# The edge ends for this factor. 
+				eend0, eend1 = this_factor[1:]
+				# The first line is the number of labels for this factor. It must coincide with the 
+				#   the number of labels for the factor it corresponds to in the model.
+				n_labels_this_edge = int(fdata[c_line])
+				try:
+					assert(n_labels_this_edge == n_labels[eend0]*n_labels[eend1])
+				except AssertionError:
+					print 'Conflicting inputs: number of labels in factor %d (%d) does not match number of labels' %(e+n_nodes, n_labels_this_edge),
+					print 'in the preamble (%d).' %(n_labels[eend0]*n_labels[eend1])
+					return
 
-			# Read this edge's energies. It is the next n_labels[eend0]*n_labels[eend1] elements, as linebreaks
-			#   don't count for anything. 
-			n_elements    = 0
-			edge_energies = []
-			while n_elements != n_labels[eend0]*n_labels[eend1]:
-				_next         =  [np.float32(x) for x in fdata[c_line].split(' ')]
-				n_elements    += len(_next)
-				edge_energies += _next
-				c_line        =  c_line + 1
-			# Reshape the array
-			edge_energies = np.array(edge_energies, dtype=e_dtype).reshape(n_labels[eend0], n_labels[eend1])
+				# Update c_line
+				c_line = c_line + 1
+	
+				# Read this edge's energies. It is the next n_labels[eend0]*n_labels[eend1] elements, as linebreaks
+				#   don't count for anything. 
+				n_elements    = 0
+				edge_energies = []
+				while n_elements != n_labels[eend0]*n_labels[eend1]:
+					_next         =  [np.float32(x) for x in fdata[c_line].split(' ')]
+					n_elements    += len(_next)
+					edge_energies += _next
+					c_line        =  c_line + 1
+				# Reshape the array
+				edge_energies = np.array(edge_energies, dtype=e_dtype).reshape(n_labels[eend0], n_labels[eend1])
+	
+	#			edge_energies = [[np.float32(x) for x in t.split(' ')] for t in fdata[c_line+1:c_line+1+n_labels[eend0]]]
+				# Set the edge energies.
+				self.set_edge_energies(eend0, eend1, edge_energies)
 
-#			edge_energies = [[np.float32(x) for x in t.split(' ')] for t in fdata[c_line+1:c_line+1+n_labels[eend0]]]
-			# Set the edge energies.
-			self.set_edge_energies(eend0, eend1, edge_energies)
+		# Make sure we have read the entire file. 
+		try:
+			assert(n_lines == c_line)
+		except AssertionError: 
+			print 'Some factors were left out. Reading did not reach end of line (%d/%d).' %(c_line/n_lines)
+			return
 
 		if _maximize:
-			# If _maximize is set, it means the original problem asks for argmax f(x). 
+			# If _maximize is set, it means the original problem asks for argmax E.
 			# However, this code solves an argmin problem. Hence, we convert the potentials
 			#    supplied in this file to energies by subtracting them from the 
 			#    maximum potential found in the model.
@@ -394,6 +431,8 @@ class Graph:
 		if energies.size != self.n_labels[i]:
 			print 'Graph.set_node_energies(): The supplied node energies do not agree',
 			print '(%d) on the number of labels required (%d).' %(energies.size, self.n_labels[i])
+			print 'Node: %d; n_labels: %d' %(i, self.n_labels[i])
+			print 'Supplied energies: ', energies
 			raise ValueError
 
 		# Make the assignment: set the node energies. 
@@ -507,6 +546,7 @@ class Graph:
 
 		# Functions to call depending on which slave is chosen
 		_slave_funcs = {
+			'factor':  self._create_factor_slaves,
 			'tree':    _make_create_tree_slaves(max_depth),
 			'mixed':   _make_create_mixed_slaves(max_depth),
 			'custom':  _make_create_custom_slaves(slave_list)
@@ -548,6 +588,99 @@ class Graph:
 				self.slave_list[s].edge_energies[e_id_in_slave, :] /= 1.0*s_ids.size
 
 		# That is it. The slaves are ready. 
+
+	def _create_factor_slaves(self):
+		'''
+		Graph._create_factor_slaves: Create a list of slave in which each
+		slave corresponds to a factor in the graph, i.e., either a node or
+		an edge. 
+		If the slave corresponds to an edge, its end-points (nodes) shall be shared
+		with the corresponding 'node' slaves. 
+		'''
+
+		# A list to record in which slaves each vertex and edge occurs. 
+		self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
+		self.edges_in_slaves = [[] for i in range(self.n_edges)]
+		# The maximum number of slaves a node and an edge can appear in. 
+		self._max_nodes_in_slave = 0
+		self._max_edges_in_slave = 0
+
+		# The number of slaves
+		self.n_slaves   = self.n_nodes + self.n_edges
+
+		# The slave list. 
+		self.slave_list = np.array([Slave() for i in range(self.n_slaves)])
+
+		# Create node slaves first. 
+		for s_id in range(self.n_nodes):
+			# The node this slave corresponds to. 
+			n_id = s_id
+
+			# The node list
+			node_list = np.array([n_id])
+			# The edge list is an empty array. 
+			edge_list = np.array([])
+
+			# Number of labels
+			n_labels  = np.array([self.n_labels[n_id]])
+
+			# Extract node energies. 
+			node_energies    = np.zeros((1, n_labels[0]), dtype=e_dtype)
+			node_energies[:] = self.node_energies[n_id,:n_labels[0]]
+
+			# There are no edge energies. 
+			edge_energies    = np.array([])
+
+			# Assign parameters to this slave. 
+			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+					edge_energies, None, 'free_node')
+
+			# Add this slave to the lists of nodes and edges in node_list and edge_list
+			self.nodes_in_slaves[n_id] += [s_id]
+
+		# Add edges now. 
+		for s_id in range(self.n_nodes, self.n_slaves):
+			# Get the edge ID. 
+			e_id = s_id - self.n_nodes
+
+			# The nodes corresponding to this edge. 
+			i_id, j_id = self._node_ids_from_edge_id[e_id]
+
+			# Node list
+			node_list = np.array([i_id, j_id])
+			# Edge list
+			edge_list = np.array([e_id])
+
+			# Number of labels
+			n_labels       = np.array([self.n_labels[i_id], self.n_labels[j_id]])
+			s_max_n_labels = np.max(n_labels)
+
+			# Extract the node energies
+			node_energies    = np.zeros((2, s_max_n_labels), dtype=e_dtype)
+			node_energies[:] = self.node_energies[node_list, :s_max_n_labels]
+			# Extract the edge energies
+			edge_energies    = np.zeros((2, n_labels[0], n_labels[1]), dtype=e_dtype)
+			edge_energies[:] = self.edge_energies[e_id, :n_labels[0], :n_labels[1]]
+
+			# Assign these parameters to this slave. 
+			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+					edge_energies, None, 'free_edge')
+
+			# Add this slave to the list of nodes and edges in node_list and edge_list
+			self.nodes_in_slaves[i_id] += [s_id]
+			self.nodes_in_slaves[j_id] += [s_id]
+			self.edges_in_slaves[e_id] += [s_id]
+
+		# For convenience, make elements of self.nodes_in_slaves, and self.edges_in_slaves into
+		# Numpy arrays. 
+		self.nodes_in_slaves = [np.array(t) for t in self.nodes_in_slaves]
+		self.edges_in_slaves = [np.array(t) for t in self.edges_in_slaves]
+
+		# Set self._max_nodes_in_slaves and self._max_edges_in_slaves. We can hard-code these values. 
+		self._max_nodes_in_slave = 2
+		self._max_edges_in_slave = 1
+		# That's it. 
+
 
 	def _create_tree_slaves(self, max_depth=5):
 		'''
@@ -1107,7 +1240,7 @@ class Graph:
 				self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
 	
 			# Create update variables for slaves. Created once, reset to zero each time
-			#   _apply_param_updates() is called. 
+			#   _compute_param_updates() and _apply_param_updates() are called. 
 			self._slave_node_up	= np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels))
 			self._slave_edge_up	= np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels, self.max_n_labels))
 			# Create a copy of these to hold the previous state update. Akin to momentum
@@ -1200,7 +1333,8 @@ class Graph:
 				break
 
 			# Apply updates to parameters of each slave. 
-			alpha = self._apply_param_updates(a_start, it)
+			alpha = self._compute_param_updates(a_start, it)
+			self._apply_param_updates(alpha)
 
 			# Print statistics. .
 			if _verbose:
@@ -1312,7 +1446,7 @@ class Graph:
 		return True
 
 	
-	def _apply_param_updates(self, a_start, it):
+	def _compute_param_updates(self, a_start, it):
 		'''
 		Apply updates to energies after one iteration of the DD-MRF algorithm. 
 		'''
@@ -1436,7 +1570,9 @@ class Graph:
 			alpha		= a_start*(approx_t - dual_t)/norm_gt
 			if self._optim_strategy is 'adaptive_d':
 				alpha   = alpha*1.0/np.sqrt(it)
+		return alpha
 
+	def _apply_param_updates(self, alpha):
 		# Perform the marked updates. The slaves to be updates are also the slaves
 		#   to be solved!
 		for s_id in self._slaves_to_solve:
@@ -1455,8 +1591,6 @@ class Graph:
 		# Copy the subgradient for the next iteration. 
 		self._prv_node_sg[:] = self._slave_node_up[:]
 		self._prv_edge_sg[:] = self._slave_edge_up[:]
-
-		return alpha
 
 
 	def force_naive_search(self, disagreements, response='t'):
@@ -1498,7 +1632,7 @@ class Graph:
 
 	def plot_costs(self):
 		f = plt.figure()
-		pc, = plt.plot(self.primal_costs, 'r-', label='PRIMAL')
+		pc, = plt.plot(np.minimum.accumulate(self.primal_costs), 'r-', label='PRIMAL')
 		dc, = plt.plot(self.dual_costs, 'b-', label='DUAL')
 		plt.legend([pc, dc], ['PRIMAL', 'DUAL'])
 		plt.show()
@@ -2081,6 +2215,22 @@ def _optimise_slave(s):
 	elif s.struct == 'free_node':
 		nl = np.argmin(s.node_energies)
 		return [nl], s.node_energies[0,nl]
+	elif s.struct == 'free_edge':
+		# Get all labellings of the two nodes involved. 
+		_labels = _generate_label_permutations(s.n_labels)
+		# First set of labels. 
+		lx, ly = _labels[0]
+		# Min energy so far ...
+		min_energy = s.node_energies[0,lx] + s.node_energies[1,ly] + s.edge_energies[0,lx,ly]
+		min_labels = [lx, ly]
+		# Find overall minimum energy. 
+		for [lx, ly] in _labels[1:]:
+			_energy = s.node_energies[0,lx] + s.node_energies[1,ly] + s.edge_energies[0,lx,ly]
+			if _energy < min_energy:
+				min_energy = _energy
+				min_labels = [lx, ly]
+		# Return the minimum energy. 
+		return min_labels, min_energy
 	else:
 		print 'Slave structure not recognised: %s.' %(s.struct)
 		raise ValueError
