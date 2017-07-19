@@ -1086,7 +1086,7 @@ class Graph:
 			# This records whether the energy stored for a particular edge is transposed to conform with the 
 			_ee_transpose    = np.zeros(n_edges, dtype=np.bool)
 			for _e_id in range(n_edges):
-				i0, i1      = _e_id, (_e_id + 1)%n_nodes
+				i0, i1      = gs['edge_ends'][_e_id,:]
 				e0, e1      = node_list[i0], node_list[i1]
 				if e0 > e1:
 					_ee_transpose[_e_id] = True		# This energy has been transposed. 
