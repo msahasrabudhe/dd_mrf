@@ -415,6 +415,45 @@ class Graph:
 			self._maximize     = False
 			self._max_pot      = None
 
+	def save_uai(self, f_name):
+		'''
+		Graph.save_uai(): Save the current graph to a uai file, specified by f_name.
+		'''
+	
+		fp = open(f_name, 'w')
+
+		# PREAMBLE
+		fp.write('MARKOV\n')
+		fp.write('%d\n' %(self.n_nodes))
+		n_labels_list = [str(t) for t in self.n_labels]
+		fp.write(' '.join(n_labels_list) + '\n')
+		fp.write('%d\n' %(self.n_nodes + self.n_edges))
+
+		# List of cliques: nodes and edges. 
+		for i in range(self.n_nodes):
+			fp.write('1 %d\n' %(i))
+
+		for i in range(self.n_edges):
+			e_ends = self._node_ids_from_edge_id[i,:]
+			fp.write('2 %d %d\n' %(e_ends[0], e_ends[1]))
+
+		fp.write('\n')
+
+		# Record nodes. 
+		for i in range(self.n_nodes):
+			fp.write('%d\n' %(self.n_labels[i]))
+			e_array = [str(t) for t in self.node_energies[i,:].tolist()] 
+			fp.write(' '.join(e_array) + '\n\n')
+
+		# Record edges. 
+		for i in range(self.n_edges):
+			e_ends = self._node_ids_from_edge_id[i,:]
+			fp.write('%d\n' %(self.n_labels[e_ends[0]]*self.n_labels[e_ends[1]]))
+			e_array = [str(t) for t in self.edge_energies[i,:,:].flatten().tolist()]
+			fp.write(' '.join(e_array) + '\n\n')
+
+		fp.close()
+
 
 	def set_node_energies(self, i, energies):
 		'''
@@ -745,6 +784,18 @@ class Graph:
 
 			# Create graph structure. 
 			gs = bp.make_graph_struct(tree_adj, n_labels)
+
+			# Verify that everything is consistent. 
+			for e in range(gs['n_edges']):
+				e0, e1 = gs['edge_ends'][e,:]
+				try:
+					assert(self._edge_id_from_node_ids[node_list[e0], node_list[e1]] == edge_list[e])
+				except AssertionError:
+					print 'Conflicting edge IDs in Graph._create_tree_slaves for slave %d.' %(s_id)
+					print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids[node_list[e0], node_list[e1]], edge_list[e])
+					print 'Node ID in slave are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
+					return
+
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
 					edge_energies, gs, 'tree')
@@ -931,12 +982,17 @@ class Graph:
 
 			# Edge energies
 			edge_energies    = np.zeros((n_edges, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
+			# This records whether the energy stored for a particular edge is transposed to conform with the 
+			#    lower_node_ID -> higher_node_ID rule. 
+			_ee_transpose    = np.zeros(n_edges, dtype=np.bool)
 			for _e_id in range(n_edges):
 				i0, i1      = _e_id, (_e_id + 1)%n_nodes
 				e0, e1      = node_list[i0], node_list[i1]
 				if e0 > e1:
-					i0, i1  = i1, i0
-				edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:n_labels[i0], 0:n_labels[i1]]
+					_ee_transpose[_e_id] = True		# This energy has been transposed. 
+					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e1], 0:self.n_labels[e0]].T
+				else:
+					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e0], 0:self.n_labels[e1]]
 #			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
 			# Here, we must adjust self.edge_energies before transferring them to a slave. 
 			# This is because self.edge_energies always has energies for an edge from a lower node index
@@ -959,8 +1015,28 @@ class Graph:
 #				else:
 #					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e1], 0:self.n_labels[e0]].T
 
+			for e in range(n_edges):
+				i0, i1 = e, (e+1)%n_nodes
+				e0, e1 = node_list[i0], node_list[i1]
+				try:
+					if e0 > e1 :
+						assert(np.array_equal(edge_energies[e, :n_labels[i0], :n_labels[i1]], self.edge_energies[edge_list[e], :self.n_labels[e1], :self.n_labels[e0]].T))
+					else:
+						assert(np.array_equal(edge_energies[e, :n_labels[i0], :n_labels[i1]], self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]]))
+				except AssertionError:
+					print 'In slave %d, ' %(s_id)
+					print node_list, edge_list
+					print 'Edge %d, %d -> %d, is not consistent with transposing energies.' %(e, i0, i1)
+					print 'edge_energies in slave:', edge_energies[e, :n_labels[i0], :n_labels[i1]].shape
+					print edge_energies[e, :n_labels[i0], :n_labels[i1]]
+					print 'edge_energies in Graph:', self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]].shape
+					print self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]]
+					return
+
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
+			# Set the _ee_transpose parameter. 
+			self.slave_list[s_id]._ee_transpose = _ee_transpose
 
 			# Add this slave to the lists of nodes and edges in node_list and edge_list
 			for n_id in node_list:
@@ -1007,12 +1083,16 @@ class Graph:
 			# Extract edge energies.
 			edge_energies    = np.zeros((n_edges, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
 #			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
+			# This records whether the energy stored for a particular edge is transposed to conform with the 
+			_ee_transpose    = np.zeros(n_edges, dtype=np.bool)
 			for _e_id in range(n_edges):
 				i0, i1      = _e_id, (_e_id + 1)%n_nodes
 				e0, e1      = node_list[i0], node_list[i1]
 				if e0 > e1:
-					i0, i1  = i1, i0
-				edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:n_labels[i0], 0:n_labels[i1]]
+					_ee_transpose[_e_id] = True		# This energy has been transposed. 
+					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e1], 0:self.n_labels[e0]].T
+				else:
+					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e0], 0:self.n_labels[e1]]
 			# Here, we must adjust self.edge_energies before transferring them to a slave. 
 			# This is because self.edge_energies always has energies for an edge from a lower node index
 			#    to a higher node index, but this convention might not be followed in the adjacency
@@ -1038,6 +1118,27 @@ class Graph:
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
 					edge_energies, gs, 'tree')
+			# Set the _ee_transpose parameter
+			self.slave_list[s_id]._ee_transpose = _ee_transpose
+
+			# Verify that everything is consistent. 
+			for e in range(gs['n_edges']):
+				e0, e1 = gs['edge_ends'][e,:]
+				try:
+					assert(self._edge_id_from_node_ids[node_list[e0], node_list[e1]] == edge_list[e])
+				except AssertionError:
+					print 'In slave %d, ' %(s_id)
+					print 'Conflicting edge IDs in Graph._create_tree_slaves.'
+					print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids[node_list[e0], node_list[e1]], edge_list[e])
+					print 'Node ID in slave are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
+					return
+
+				try:
+					assert((e0 > e1) == _ee_transpose[e])
+				except AssertionError:
+					print 'In slave %d, ' %(s_id)
+					print 'Edge %d, %d -> %d, is not consistent with transposing energies.' %(e, e0, e1)
+					return
 
 			# Add this slave to the lists of nodes and edges in node_list and edge_list
 			for n_id in node_list:
@@ -1218,26 +1319,14 @@ class Graph:
 			# Set the optimisation strategy. 
 			self._optim_strategy = strategy
 	
-			self.decomposition = decomposition
-	
-			# Find the least "step" size in energy. This is given by the smallest difference
-			#   between any two energy energies in the Graph. 
-			# TODO HACK: If the difference between primal and dual energies at 
-			#   an iteration is smaller than this step size, we can safely 
-			#   perform a naive search on the conflicting nodes, and choose the smallest
-			#   energy. 
-#			_all_ergs = np.concatenate((self.node_energies.flatten(), self.edge_energies.flatten()))
-#			_all_ergs = np.unique(_all_ergs)
-#			_erg_difs = [np.abs(_all_ergs[i] - _all_ergs[i+1]) for i in range(_all_ergs.size-1)]
-#			_erg_step = np.min(_erg_difs)
-#			self._erg_step = _erg_step
-	
 			# Create slaves. This creates a list of slaves and stores it in 
 			# 	self.slave_list. The numbering of the slaves starts from the top-left,
 			# 	and continues in row-major fashion. For example, there are 
 			#   (self.rows-1)*(self.cols-1) slaves if the 'cell' decomposition is used. 
 			if _create_slaves:
+				self.decomposition = decomposition
 				self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
+				self.check_decomposition()
 	
 			# Create update variables for slaves. Created once, reset to zero each time
 			#   _compute_param_updates() and _apply_param_updates() are called. 
@@ -1351,9 +1440,9 @@ class Graph:
 			# Increase iteration.
 			it += 1
 
-		print 'The final labelling is stored as a member \'labels\' in the object.'
+		print 'The best labelling is stored as a member \'labels\' in the object.'
+		print 'Best PRIMAL = %.6f, Best DUAL = %.6f, Gap = %.6f' %(self._best_primal_cost, self._best_dual_cost, self._best_primal_cost - self._best_dual_cost)
 		
-
 	def _optimise_slaves(self):
 		'''
 		A function to optimise all slaves. This function distributes the job of
@@ -1399,7 +1488,9 @@ class Graph:
 		# Iterate over nodes to check that node energies are split
 		#    correctly among slaves. 
 
-		def _array_equal(a, b, epsilon=1e-8):
+		flag = True
+
+		def _array_equal(a, b, epsilon=1e-6):
 			'''
 			Check whether two arrays are equal up to a precision.
 			'''
@@ -1408,9 +1499,12 @@ class Graph:
 					return False
 			return True
 
-		print 'Checking nodes. [ ',
+		print 'Checking nodes ',
+		sys.stdout.flush()
 		for n_id in range(self.n_nodes):
-			print '%d' %(n_id),
+			if n_id%(self.n_nodes/10) == 0:
+				sys.stdout.write('.')
+				sys.stdout.flush()
 			_n_energy = 0.0
 			for s_id in self.nodes_in_slaves[n_id]:
 				n_id_in_s = self.slave_list[s_id].node_map[n_id]
@@ -1421,29 +1515,37 @@ class Graph:
 				print '\nGraph.check_decomposition: Dual decomposition disagreement for node %d.' %(n_id)
 				print 'Graph.check_decomposition: Node energies in PRIMAL are '
 				print self.node_energies[n_id, :n_lbl]
-				print 'Graph.check_decomposition: Sum of node energies in the DUAL is '
+				print 'Graph.check_decomposition: Sum of node energies in the decomposition is '  
 				print _n_energy.tolist()
-		print ' ]' 
+				flag = False
+		print 
 
-		print 'Checking edges. [ ',
+		print 'Checking edges ',
+		sys.stdout.flush()
 		for e_id in range(self.n_edges):
-			print '%d' %(e_id),
-			_e_energy = 0.0
-			x, y = self._node_ids_from_edge_id[e_id,:]
+			if e_id%(self.n_edges/10) == 0:
+				sys.stdout.write('.')
+				sys.stdout.flush()
+			x, y             = self._node_ids_from_edge_id[e_id,:]
+			n_lbl_x, n_lbl_y = self.n_labels[x], self.n_labels[y]
+			_e_energy        = np.zeros((n_lbl_x, n_lbl_y))
 			for s_id in self.edges_in_slaves[e_id]:
 				e_id_in_s        = self.slave_list[s_id].edge_map[e_id]
-				n_lbl_x, n_lbl_y = self.n_labels[x], self.n_labels[y]
-				
-				_e_energy        += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
+			
+				if hasattr(self.slave_list[s_id], '_ee_transpose') and self.slave_list[s_id]._ee_transpose[e_id_in_s]:
+					_e_energy    += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_y, :n_lbl_x].T
+				else:
+					_e_energy    += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
 			if not _array_equal(_e_energy, self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]):
 				print '\nGraph.check_decomposition: Dual decomposition disagreement for edge %d, with edge_ends %d and %d.' %(e_id, x, y)
 				print 'Graph.check_decomposition: Edge energies in PRIMAL are '
 				print self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]
-				print 'Graph.check_decomposition: Sum of edge energies in the DUAL is '
+				print 'Graph.check_decomposition: Sum of edge energies in the decomposition is '
 				print _e_energy
-		print ' ]'
+				flag = False
+		print
 
-		return True
+		return flag
 
 	
 	def _compute_param_updates(self, a_start, it):
@@ -1494,7 +1596,7 @@ class Graph:
 			#
 			#   for all s. s here signifies slaves. 
 			# This can be very easily done with array operations!
-			_node_up	= ls_ - np.tile(ls_avg_, [n_slaves_nid, 1])
+			_node_up	= ls_ - ls_avg_
 	
 			# Find the node ID for n_id in each slave in s_ids. 
 			sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
@@ -1533,13 +1635,24 @@ class Graph:
 			#
 			#   for all s. s here signifies slaves. 
 			# This can be very easily done with array operations!
-			_edge_up	= ls_ - np.tile(ls_avg_, [n_slaves_eid, 1, 1])
+			_edge_up	= ls_ - ls_avg_
 	
-			# Find the node ID for n_id in each slave in s_ids. 
+			# Find the edge ID for e_id in each slave in s_ids. 
 			sl_eids = [self.slave_list[s].edge_map[e_id] for s in s_ids]
 	
 			# Mark this update to be done later. 
 			self._slave_edge_up[s_ids, sl_eids, :self.n_labels[x], :self.n_labels[y]] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
+			
+			# We need to correct for transposed energies. The best place to do that is here. 
+			for idx in range(n_slaves_eid):
+				# If the edge is transposed ...
+				s_id   = s_ids[idx]
+				sl_eid = sl_eids[idx]
+				if hasattr(self.slave_list[s_id], '_ee_transpose') and self.slave_list[s_id]._ee_transpose[sl_eid]:
+					_hold = np.copy(self._slave_edge_up[s_id, sl_eid, :self.n_labels[x], :self.n_labels[y]])
+					self._slave_edge_up[s_id, sl_eid, :, :]                                 = 0.0
+					self._slave_edge_up[s_id, sl_eid, :self.n_labels[y], :self.n_labels[x]] = np.squeeze(_hold).transpose()
+
 			# Add this value to the subgradient. 
 			norm_gt	+= np.sum(_edge_up**2)
 			# Mark this slave for edge updates. 
@@ -1632,9 +1745,10 @@ class Graph:
 
 	def plot_costs(self):
 		f = plt.figure()
-		pc, = plt.plot(np.minimum.accumulate(self.primal_costs), 'r-', label='PRIMAL')
-		dc, = plt.plot(self.dual_costs, 'b-', label='DUAL')
-		plt.legend([pc, dc], ['PRIMAL', 'DUAL'])
+		pc,  = plt.plot(self.primal_costs, 'r--', label='PRIMAL') 
+		bpc, = plt.plot(np.minimum.accumulate(self.primal_costs), 'r-', label='best PRIMAL')
+		dc,  = plt.plot(self.dual_costs, 'b-', label='DUAL')
+		plt.legend([pc, bpc, dc], ['PRIMAL', 'best PRIMAL', 'DUAL'])
 		plt.show()
 
 
@@ -1730,7 +1844,7 @@ class Graph:
 		#    neighbours of a node in _check_nodes. 
 		for i in range(self._check_nodes.size):
 			n_id = self._check_nodes[i]
-			neighs = np.where(self.adj_mat[i,:] == True)[0]
+			neighs = np.where(self.adj_mat[n_id,:] == True)[0]
 			e_neighs = [self._edge_id_from_node_ids[n_id, _n] for _n in neighs]
 			edge_conflicts[e_neighs] = True
 
