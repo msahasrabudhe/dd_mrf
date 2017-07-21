@@ -199,14 +199,14 @@ class Graph:
 	them according to the DD-MRF algorithm. 
 	'''
 
-	def __init__(self, n_nodes=None, n_labels=None, n_edges=None, init_from_uai=None, _maximize=False):
+	def __init__(self, n_nodes=None, n_labels=None, n_edges=None, init_from_uai=None, _maximise=False):
 		'''
 		Graph.__init__(): Initialise the graph to be of shape (rows, cols), with 
                             a node taking a maximum of n_labels. 
 		'''
 		# If init_from_uai is set, call self._init_from_uai
 		if init_from_uai is not None:
-			self._init_from_uai(init_from_uai, _maximize)
+			self._init_from_uai(init_from_uai, _maximise)
 			return
 
 		# The rows, columns, and node indexing. 
@@ -235,7 +235,7 @@ class Graph:
 		self._node_ids_from_edge_id = np.zeros((self.n_edges, 2), dtype=np.int)
 
 		# To set the maximum number of labels, we consider what kind of input is n_labels. 
-		# If n_labels is an integer, we assume that all nodes should get the same max_n_label.
+		# If n_labels is an integer, we assume that all nodes should get the same max_n_labels.
 		# Another option is to specify a list of max_n_labels. 
 		if type(n_labels) == np.int:
 			self.n_labels   = n_labels + np.zeros(self.n_nodes).astype(np.int)
@@ -255,11 +255,14 @@ class Graph:
 		self.node_flags	    = np.zeros(self.n_nodes, dtype=np.bool)
 
 		# Flag to determine whether the original model demands a maximisation. 
-		self._maximize      = False
+		self._maximise      = False
 		self._max_pot       = None
 
+		# Which strategy to use to generate primal solutions. 
+		self._primal_strat  = 'vote'			# Use slaves to vote on nodes. 
 
-	def _init_from_uai(self, uai_file, _maximize):
+
+	def _init_from_uai(self, uai_file, _maximise):
 		# Read a .uai file and set parameters accordingly.
 		fuai = open(uai_file, 'r')
 
@@ -391,8 +394,8 @@ class Graph:
 			print 'Some factors were left out. Reading did not reach end of line (%d/%d).' %(c_line/n_lines)
 			return
 
-		if _maximize:
-			# If _maximize is set, it means the original problem asks for argmax E.
+		if _maximise:
+			# If _maximise is set, it means the original problem asks for argmax E.
 			# However, this code solves an argmin problem. Hence, we convert the potentials
 			#    supplied in this file to energies by subtracting them from the 
 			#    maximum potential found in the model.
@@ -409,10 +412,10 @@ class Graph:
 			self.edge_energies = 1.0 - self.edge_energies
 
 			# This flag determines whether a potential is to be maximised. 
-			self._maximize     = True
+			self._maximise     = True
 			self._max_pot      = _max_pot
 		else:
-			self._maximize     = False
+			self._maximise     = False
 			self._max_pot      = None
 
 	def save_uai(self, f_name):
@@ -914,11 +917,11 @@ class Graph:
 		# The list of cycles. 
 		cycles = dfs_unique_cycles(adj_mat, max_length=max_length)
 		# Remove edges from the graph that are already in these cycles. 
-		for c_n in cycles:
-			for _n in range(len(c_n)):
-				i0, i1     = _n, (_n+1)%len(c_n)
-				adj_mat[c_n[i0], c_n[i1]] = False
-				adj_mat[c_n[i1], c_n[i0]] = False
+#		for c_n in cycles:
+#			for _n in range(len(c_n)):
+#				i0, i1     = _n, (_n+1)%len(c_n)
+#				adj_mat[c_n[i0], c_n[i1]] = False
+#				adj_mat[c_n[i1], c_n[i0]] = False
 
 		# We would like each tree to have at most a quarter of the
 		#    total nodes in the graph. The depth is hence set as 
@@ -928,7 +931,7 @@ class Graph:
 		_max_depth_t = np.log(self.n_nodes/4.0)/avg_degree
 
 		# Now find trees in the remaining adjacency matrix. 
-		subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=2)		# Just using 2 for now. 
+		subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=-1)		# Just using 2 for now. 
 
 		# Finally, add any nodes that do not have any edges connected to them, 
 		#    and place them in slaves of their own. 
@@ -982,18 +985,8 @@ class Graph:
 
 			# Edge energies
 			edge_energies    = np.zeros((n_edges, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
-			# This records whether the energy stored for a particular edge is transposed to conform with the 
-			#    lower_node_ID -> higher_node_ID rule. 
-			_ee_transpose    = np.zeros(n_edges, dtype=np.bool)
-			for _e_id in range(n_edges):
-				i0, i1      = _e_id, (_e_id + 1)%n_nodes
-				e0, e1      = node_list[i0], node_list[i1]
-				if e0 > e1:
-					_ee_transpose[_e_id] = True		# This energy has been transposed. 
-					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e1], 0:self.n_labels[e0]].T
-				else:
-					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e0], 0:self.n_labels[e1]]
-#			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
+			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
+
 			# Here, we must adjust self.edge_energies before transferring them to a slave. 
 			# This is because self.edge_energies always has energies for an edge from a lower node index
 			#    to a higher node index, but this convention might not be followed in the cycle. 
@@ -1019,10 +1012,7 @@ class Graph:
 				i0, i1 = e, (e+1)%n_nodes
 				e0, e1 = node_list[i0], node_list[i1]
 				try:
-					if e0 > e1 :
-						assert(np.array_equal(edge_energies[e, :n_labels[i0], :n_labels[i1]], self.edge_energies[edge_list[e], :self.n_labels[e1], :self.n_labels[e0]].T))
-					else:
-						assert(np.array_equal(edge_energies[e, :n_labels[i0], :n_labels[i1]], self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]]))
+					assert(np.array_equal(edge_energies[e, :n_labels[i0], :n_labels[i1]], self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]]))
 				except AssertionError:
 					print 'In slave %d, ' %(s_id)
 					print node_list, edge_list
@@ -1035,8 +1025,6 @@ class Graph:
 
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
-			# Set the _ee_transpose parameter. 
-			self.slave_list[s_id]._ee_transpose = _ee_transpose
 
 			# Add this slave to the lists of nodes and edges in node_list and edge_list
 			for n_id in node_list:
@@ -1082,17 +1070,7 @@ class Graph:
 
 			# Extract edge energies.
 			edge_energies    = np.zeros((n_edges, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
-#			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
-			# This records whether the energy stored for a particular edge is transposed to conform with the 
-			_ee_transpose    = np.zeros(n_edges, dtype=np.bool)
-			for _e_id in range(n_edges):
-				i0, i1      = gs['edge_ends'][_e_id,:]
-				e0, e1      = node_list[i0], node_list[i1]
-				if e0 > e1:
-					_ee_transpose[_e_id] = True		# This energy has been transposed. 
-					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e1], 0:self.n_labels[e0]].T
-				else:
-					edge_energies[_e_id, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[edge_list[_e_id], 0:self.n_labels[e0], 0:self.n_labels[e1]]
+			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
 			# Here, we must adjust self.edge_energies before transferring them to a slave. 
 			# This is because self.edge_energies always has energies for an edge from a lower node index
 			#    to a higher node index, but this convention might not be followed in the adjacency
@@ -1118,8 +1096,6 @@ class Graph:
 			# Set slave parameters. 
 			self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
 					edge_energies, gs, 'tree')
-			# Set the _ee_transpose parameter
-			self.slave_list[s_id]._ee_transpose = _ee_transpose
 
 			# Verify that everything is consistent. 
 			for e in range(gs['n_edges']):
@@ -1131,13 +1107,6 @@ class Graph:
 					print 'Conflicting edge IDs in Graph._create_tree_slaves.'
 					print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids[node_list[e0], node_list[e1]], edge_list[e])
 					print 'Node ID in slave are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
-					return
-
-				try:
-					assert((e0 > e1) == _ee_transpose[e])
-				except AssertionError:
-					print 'In slave %d, ' %(s_id)
-					print 'Edge %d, %d -> %d, is not consistent with transposing energies.' %(e, e0, e1)
 					return
 
 			# Add this slave to the lists of nodes and edges in node_list and edge_list
@@ -1284,13 +1253,14 @@ class Graph:
 				raise ValueError
 	
 			# Check if a permissible strategy is being used. 
-			if strategy not in ['step', 'step_ss', 'step_sg', 'adaptive', 'adaptive_d']:
-				print 'Permissible values for strategy are \'step\', \'step_sg\', \'adaptive\', and \'adaptive_d\''
-				print '\'step\'        Use diminshing step-size rule: a_t = a_start/sqrt(it).'
-				print '\'step_ss\'     Use a square summable but not summable sequence: a_t = a_start/(1.0 + t).'
-				print '\'step_sg\'     Use subgradient in combination with diminishing step-size rule: a_t = a_start/(sqrt(it)*||dg||**2).'
-				print '\'adaptive\'    Use adaptive rule given by the difference between the estimated PRIMAL cost and the current DUAL cost: a_t = a_start*(PRIMAL_t - DUAL_t)/||dg||**2.'
-				print '\'adaptive_d\'  Use adaptive rule with diminishing step-size rule: a_t = a_start*(PRIMAL_t - DUAL_t)/(sqrt(it)*||dg||**2).'
+			if strategy not in ['step', 'step_ss', 'step_sg', 'adaptive', 'adaptive_d', 'adaptive_delta']:
+				print 'Permissible values for strategy are \'step\', \'step_sg\', \'adaptive\', \'adaptive_d\', and \'adaptive_delta\''
+				print '\'step\'           Use diminshing step-size rule: a_t = a_start/sqrt(it).'
+				print '\'step_ss\'        Use a square summable but not summable sequence: a_t = a_start/(1.0 + t).'
+				print '\'step_sg\'        Use subgradient in combination with diminishing step-size rule: a_t = a_start/(sqrt(it)*||dg||**2).'
+				print '\'adaptive\'       Use adaptive rule given by the difference between the estimated PRIMAL cost and the current DUAL cost: a_t = a_start*(PRIMAL_t - DUAL_t)/||dg||**2.'
+				print '\'adaptive_d\'     Use adaptive rule with diminishing step-size rule: a_t = a_start*(PRIMAL_t - DUAL_t)/(sqrt(it)*||dg||**2).'
+				print '\'adaptive_delta\' Use adaptive rule which tries to get an improvement of delta at each iteration.'
 				raise ValueError
 			# If strategy is adaptive, we would like a_start to be in (0, 2).
 			if strategy is 'adaptive' and (a_start <= 0 or a_start > 2):
@@ -1326,7 +1296,12 @@ class Graph:
 			if _create_slaves:
 				self.decomposition = decomposition
 				self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
-				self.check_decomposition()
+				print 'Checking decomposition ... ', 
+				if self.check_decomposition():
+					print 'OK!'
+				else:
+				 	print 'Conflicts found (listed above). Please fix the decomposition before attempting to run Graph.optimise.'
+				 	return
 	
 			# Create update variables for slaves. Created once, reset to zero each time
 			#   _compute_param_updates() and _apply_param_updates() are called. 
@@ -1354,10 +1329,23 @@ class Graph:
 			# A list to record the number of disagreeing nodes at each iteration
 			self._n_miss_history    = []
 	
+			# Best primal and dual costs
 			self._best_primal_cost	= np.inf
 			self._best_dual_cost	= -np.inf
 
-		# The iteration
+			# Accumulators for computing intermediate primal and dual solutions. 
+			self._wsg_accumulator   = np.zeros((self.n_nodes, self.max_n_labels))
+			self._sg_accumulator    = np.zeros((self.n_nodes, self.max_n_labels))
+			# Accumulator for alpha. 
+			self._alpha_accumulator = 0.0
+			# Stores the current subgradient, but not in terms of one-hot vectors. 
+			self._sg_node           = np.zeros((self.n_nodes, self.max_n_labels), dtype=np.int)
+
+			# The iteration in the optimisation process. This is stored as a member of the class so that
+			#     continuing optimisation after it has stopped is easier. 
+			self.it = 1
+
+		# The iteration that measures how long to run this "batch" of optimisation. 
 		it = 1
 
 		# Whether converged or not. 
@@ -1368,7 +1356,7 @@ class Graph:
 		# Loop till not converged. 
 		while not converged and it <= max_iter:
 			if _verbose:
-				print 'Iteration %5d. Solving %5d subproblems ...' %(it, self._slaves_to_solve.size),
+				print 'Iteration %5d. Solving %5d subproblems ...' %(self.it, self._slaves_to_solve.size),
 			# Solve all the slaves. 
 			# The following optimises the energy for each slave, and stores the 
 			#    resulting labelling as a member in the slaves. 
@@ -1376,6 +1364,9 @@ class Graph:
 			if _verbose:
 				print 'done.',
 			sys.stdout.flush()
+
+			# Compute parameter updates after this round of optimisation. But don't apply them yet!
+			self._compute_param_updates(a_start)
 
 			# Get the primal cost at this iteration
 			primal_cost     = self._compute_primal_cost()
@@ -1399,7 +1390,7 @@ class Graph:
 			# Verify whether the algorithm has converged. If all slaves agree
 			#    on the labelling of every node, we have convergence. 
 			if disagreements.size == 0:
-				print 'Converged after %d iterations!\n' %(it)
+				print 'Converged after %d iterations!\n' %(self.it)
 				print 'At convergence, PRIMAL = %.6f, DUAL = %.6f, Gap = %.6f.' %(primal_cost, dual_cost, primal_cost - dual_cost)
 #				self._assign_labels()			# Use this if you want to infer a PRIMAL solution from the final state of the slaves instead.
 				# Break from loop.
@@ -1407,7 +1398,7 @@ class Graph:
 				break
 
 #			# If we are supposed to actually maximize ...
-#			if self._maximize:
+#			if self._maximise:
 #				# Number of factors in the graph. This is equal to the number
 #				#    of edges and the number of nodes. 
 #				n_factors   = self.n_edges + self.n_nodes
@@ -1422,23 +1413,22 @@ class Graph:
 				break
 
 			# Apply updates to parameters of each slave. 
-			alpha = self._compute_param_updates(a_start, it)
-			self._apply_param_updates(alpha)
+			self._apply_param_updates()
 
 			# Print statistics. .
 			if _verbose:
-				print ' alpha = %10.6f. n_miss = %6d.' %(alpha, disagreements.size),
-				print '||dg||**2 = %4.2f, PRIMAL = %6.6f. DUAL = %6.6f, P - D = %6.6f, min(P - D) = %6.6f' \
-				%(self.subgradient_norms[-1], primal_cost, dual_cost, primal_cost-dual_cost, self._best_primal_cost - self._best_dual_cost)
-
-			# Switch to step strategy if n_miss = disagreements.size < 5% of number of nodes. 
-			if self._optim_strategy is 'adaptive' and  disagreements.size < 0.000*self.n_nodes:
-				print 'Switching to step strategy as n_miss < 0.1% of the number of nodes.'
-				a_start = alpha
-				self._optim_strategy = 'step'
+				print ' alpha = %10.6f. n_miss = %6d.' %(self.alpha, disagreements.size),
+				print '||dg||**2 = %4.2f, PRIMAL = %6.6f. DUAL = %6.6f, P - D = %6.6f, min(P - D) = %6.6f '\
+				%(self.subgradient_norms[-1], primal_cost, dual_cost, primal_cost-dual_cost, self._best_primal_cost - self._best_dual_cost),
 
 			# Increase iteration.
-			it += 1
+			self.it += 1
+			it      += 1
+
+			if self.check_decomposition():
+				print 'OK!'
+			else:
+			 	print 'Something wrong wrong!'
 
 		print 'The best labelling is stored as a member \'labels\' in the object.'
 		print 'Best PRIMAL = %.6f, Best DUAL = %.6f, Gap = %.6f' %(self._best_primal_cost, self._best_dual_cost, self._best_primal_cost - self._best_dual_cost)
@@ -1463,7 +1453,7 @@ class Graph:
 #		optima = []
 #		for s in _to_solve:
 #			optima += [_optimise_slave(s)]
-# --- Using Multiprocessing. Buddy. Do not use.
+# --- Using Multiprocessing. Buggy. DO NOT USE. 
 #		_multp = multiprocessing.Pool(n_cores)
 #		optima = _multp.map(_optimise_slave, _to_solve)
 
@@ -1475,7 +1465,6 @@ class Graph:
 			if self.slave_list[s_id].struct is 'tree':
 				self.slave_list[s_id]._messages    = optima[i][2]
 				self.slave_list[s_id]._messages_in = optima[i][3]
-#			self.slave_list[s_id]._compute_energy()
 
 	# End of Graph._optimise_slaves()
 
@@ -1489,6 +1478,7 @@ class Graph:
 		#    correctly among slaves. 
 
 		flag = True
+		numel = self.n_nodes + self.n_edges
 
 		def _array_equal(a, b, epsilon=1e-6):
 			'''
@@ -1499,10 +1489,8 @@ class Graph:
 					return False
 			return True
 
-		print 'Checking nodes ',
-		sys.stdout.flush()
 		for n_id in range(self.n_nodes):
-			if n_id%(self.n_nodes/10) == 0:
+			if n_id%(numel/10) == 0:
 				sys.stdout.write('.')
 				sys.stdout.flush()
 			_n_energy = 0.0
@@ -1518,12 +1506,9 @@ class Graph:
 				print 'Graph.check_decomposition: Sum of node energies in the decomposition is '  
 				print _n_energy.tolist()
 				flag = False
-		print 
 
-		print 'Checking edges ',
-		sys.stdout.flush()
 		for e_id in range(self.n_edges):
-			if e_id%(self.n_edges/10) == 0:
+			if (self.n_nodes + e_id)%(numel/10) == 0:
 				sys.stdout.write('.')
 				sys.stdout.flush()
 			x, y             = self._node_ids_from_edge_id[e_id,:]
@@ -1531,11 +1516,7 @@ class Graph:
 			_e_energy        = np.zeros((n_lbl_x, n_lbl_y))
 			for s_id in self.edges_in_slaves[e_id]:
 				e_id_in_s        = self.slave_list[s_id].edge_map[e_id]
-			
-				if hasattr(self.slave_list[s_id], '_ee_transpose') and self.slave_list[s_id]._ee_transpose[e_id_in_s]:
-					_e_energy    += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_y, :n_lbl_x].T
-				else:
-					_e_energy    += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
+				_e_energy    += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
 			if not _array_equal(_e_energy, self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]):
 				print '\nGraph.check_decomposition: Dual decomposition disagreement for edge %d, with edge_ends %d and %d.' %(e_id, x, y)
 				print 'Graph.check_decomposition: Edge energies in PRIMAL are '
@@ -1543,12 +1524,11 @@ class Graph:
 				print 'Graph.check_decomposition: Sum of edge energies in the decomposition is '
 				print _e_energy
 				flag = False
-		print
 
 		return flag
 
 	
-	def _compute_param_updates(self, a_start, it):
+	def _compute_param_updates(self, a_start):
 		'''
 		Apply updates to energies after one iteration of the DD-MRF algorithm. 
 		'''
@@ -1567,6 +1547,9 @@ class Graph:
 		self._slave_node_up[:] = 0.0
 		self._slave_edge_up[:] = 0.0
 
+		# Set self._sg_node also to zero. 
+		self._sg_node[:,:]     = 0.0
+
 		# Mark which slaves need updates. A slave s_id needs update only if self._slave_node_up[s_id] 
 		#   has non-zero values in the end.
 		self._mark_sl_up[:]	= False
@@ -1578,10 +1561,12 @@ class Graph:
 			s_ids			= self.nodes_in_slaves[n_id]
 			n_slaves_nid	= s_ids.size
 	
-			# Retrieve labels assigned to this point by each slave, and make it into a one-hot vector. 
-			ls_		= np.array([make_one_hot(self.slave_list[s].get_node_label(n_id), self.n_labels[n_id]) for s in s_ids])
-			ls_avg_	= np.mean(ls_, axis=0)
-	
+			# Retrieve labels assigned to this point by each slave ...
+			ls_int_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+			# ... and make them into one-hot vectors. The previous is needed by self._sg_node. 
+			ls_		    = np.array([make_one_hot(l_int, self.n_labels[n_id]) for l_int in ls_int_])
+			ls_avg_	    = np.mean(ls_, axis=0)
+
 			# Check if all labellings for this node agree. 
 			if np.max(ls_avg_) == 1:
 				# As all vectors are one-hot, this condition being true implies that 
@@ -1597,6 +1582,9 @@ class Graph:
 			#   for all s. s here signifies slaves. 
 			# This can be very easily done with array operations!
 			_node_up	= ls_ - ls_avg_
+
+			# Add to the subgradient, self._sg_node
+			self._sg_node[n_id, :self.n_labels[n_id]] = np.sum(ls_, axis=0)
 	
 			# Find the node ID for n_id in each slave in s_ids. 
 			sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
@@ -1615,12 +1603,11 @@ class Graph:
 			n_slaves_eid	= s_ids.size
 	
 			# Retrieve labellings of this edge, assigned by each slave.
-			x, y	= self._node_ids_from_edge_id[e_id,:]
-			ls_		= np.array([
-						make_one_hot((self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)), self.n_labels[x], self.n_labels[y]) 
-						for s in s_ids])
-			ls_avg_	= np.mean(ls_, axis=0, keepdims=True)
-	
+			x, y	      = self._node_ids_from_edge_id[e_id,:]
+			ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
+			ls_		      = np.array([make_one_hot(l_int, self.n_labels[x], self.n_labels[y]) for l_int in ls_int_])
+			ls_avg_	      = np.mean(ls_, axis=0, keepdims=True)
+
 			# Check if all labellings for this node agree. 
 			if np.max(ls_avg_) == 1:
 				# As all vectors are one-hot, this condition being true implies that 
@@ -1643,16 +1630,6 @@ class Graph:
 			# Mark this update to be done later. 
 			self._slave_edge_up[s_ids, sl_eids, :self.n_labels[x], :self.n_labels[y]] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
 			
-			# We need to correct for transposed energies. The best place to do that is here. 
-			for idx in range(n_slaves_eid):
-				# If the edge is transposed ...
-				s_id   = s_ids[idx]
-				sl_eid = sl_eids[idx]
-				if hasattr(self.slave_list[s_id], '_ee_transpose') and self.slave_list[s_id]._ee_transpose[sl_eid]:
-					_hold = np.copy(self._slave_edge_up[s_id, sl_eid, :self.n_labels[x], :self.n_labels[y]])
-					self._slave_edge_up[s_id, sl_eid, :, :]                                 = 0.0
-					self._slave_edge_up[s_id, sl_eid, :self.n_labels[y], :self.n_labels[x]] = np.squeeze(_hold).transpose()
-
 			# Add this value to the subgradient. 
 			norm_gt	+= np.sum(_edge_up**2)
 			# Mark this slave for edge updates. 
@@ -1665,27 +1642,30 @@ class Graph:
 		self.subgradient_norms += [norm_gt]
 
 		# Add momentum.
-		if it > 1:
+		if self.it > 1:
 			self._slave_node_up = (1.0 - self._momentum)*self._slave_node_up + self._momentum*self._prv_node_sg
 			self._slave_edge_up = (1.0 - self._momentum)*self._slave_edge_up + self._momentum*self._prv_edge_sg
 
 		# Compute the alpha for this step. 
 		if self._optim_strategy is 'step':
-			alpha	= a_start/np.sqrt(it)
+			alpha	= a_start/np.sqrt(self.it)
 		elif self._optim_strategy is 'step_ss':
-			alpha   = a_start/(1.0 + it)
+			alpha   = a_start/(1.0 + self.it)
 		elif self._optim_strategy is 'step_sg':
-			alpha   = a_start/np.sqrt(it)
+			alpha   = a_start/np.sqrt(self.it)
 			alpha   = alpha*1.0/norm_gt
-		elif self._optim_strategy in ['adaptive', 'adaptive_d']:
+		elif self._optim_strategy in ['adaptive', 'adaptive_d', 'adaptive_delta']:
 			approx_t	= self._best_primal_cost
 			dual_t		= self.dual_costs[-1]
 			alpha		= a_start*(approx_t - dual_t)/norm_gt
 			if self._optim_strategy is 'adaptive_d':
-				alpha   = alpha*1.0/np.sqrt(it)
-		return alpha
+				alpha   = alpha*1.0/np.sqrt(self.it)
+		# Set alpha. 
+		self.alpha = alpha
 
-	def _apply_param_updates(self, alpha):
+	def _apply_param_updates(self):
+		# Retrieve alpha
+		alpha = self.alpha
 		# Perform the marked updates. The slaves to be updates are also the slaves
 		#   to be solved!
 		for s_id in self._slaves_to_solve:
@@ -1889,7 +1869,8 @@ class Graph:
 		labels = np.zeros(self.n_nodes, dtype=np.int)
 
 		# Iterate over every node. 
-		if self.decomposition is 'tree':
+		if self.decomposition is 'tree' and self._primal_strat is 'bp':
+#		if self._primal_strat:			# Adding a method to estimate primals based on ergodic sequences. Commented previous if. 
 			# Use Max product messages to compute the best solution. 
 		
 			# Conflicts are in self._check_nodes. 
@@ -1930,13 +1911,36 @@ class Graph:
 							node_bel += self.slave_list[s_id]._messages[_e_id, :n_lbl]
 
 				labels[n_id] = np.argmax(node_bel)
-		else:
+		elif self._primal_strat is 'vote':			# Adding a method to estimate primals based on ergodic sequences. Changed else to elif False. 
 			for n_id in range(self.n_nodes):
 				# Retrieve the labels assigned by every slave to this node. 
 				s_ids    = self.nodes_in_slaves[n_id]
 				s_labels = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
 				# Find the most voted label. 
 				labels[n_id] = np.int(stats.mode(s_labels)[0][0])
+		elif self._primal_strat is 'wsg':
+			# Get previous solution. self._wsg_accumulator accumulates weighted subgradients for each iteration. 
+			# The weight for a subgradient is just the alpha corresponding to that iteration. 
+			self._wsg_accumulator   += self.alpha*self._sg_node
+
+			# Add the current alpha to this accumulator
+			self._alpha_accumulator += self.alpha
+			# Using the first strategy, compute next solution based on the method of weighted averaging. 
+			# x_k = \frac{\sum_{t=1}^k alpha_t*subgrad_t}{\sum_{t=1}^k alpha_t}
+			self._wsg_nxt_solution = self._wsg_accumulator/self._alpha_accumulator
+
+			# The resulting labelling is obtained by rounding the solution.
+			labels = np.argmax(self._wsg_nxt_solution, axis=1)
+
+		elif self._primal_strat is 'sg':
+			# Similarly, we have self._sg_accumulator, which does not weigh the subgradients. 
+			self._sg_accumulator    += self._sg_node
+			# The second strategy is to keep accumulating the subgradients and dividing by the
+			# number of iterations so far. 
+			self._sg_nxt_solution  = self._sg_accumulator/self.it
+
+			# The resulting labelling is obtained by rounding the solution.
+			labels = np.argmax(self._sg_nxt_solution, axis=1)
 
 		# Return this labelling. 
 		return labels
@@ -1952,7 +1956,7 @@ class Graph:
 			labels	    = self._get_primal_solution()
 			self.labels = labels
 
-		# Compute node comtributions.
+		# Compute node contributions.
 		for n_id in range(self.n_nodes):
 			cost += self.node_energies[n_id][labels[n_id]]
 
@@ -2215,6 +2219,43 @@ def _optimise_tree(slave):
 	return labels, energy, messages, messages_in
 # ---------------------------------------------------------------------------------------
 
+def optimise_cycle2(slave):
+	return _optimise_cycle2(slave)
+
+def optimise_cycle(slave):
+	return _optimise_cycle(slave)
+
+def _optimise_cycle2(slave):
+	''' Proxy: optimise four node cycle '''
+	all_labellings = _generate_label_permutations(slave.n_labels)
+	min_energy = np.inf
+	min_labels = []
+
+	# Minimum energy. We set the minimum energy to four times the maximum node energy plus
+	# 	four times the maximum edge energy. 
+	min_energy		= 4*np.max(slave.node_energies) + 4*np.max(slave.edge_energies)
+
+	for l_ in all_labellings:
+		i, j, k, l = l_
+		energy  = slave.node_energies[0][i] + slave.node_energies[1][j] + \
+				  slave.node_energies[2][k] + slave.node_energies[3][l]
+
+		node_list = slave.node_list
+		for i in range(slave.n_edges):
+			n0, n1 = node_list[i], node_list[(i+1)%4]
+			l0, l1 = l_[i], l_[(i+1)%4]
+			if n0 < n1:
+				energy += slave.edge_energies[i, l0, l1]
+			else:
+				energy += slave.edge_energies[i, l1, l0]
+#energy += slave.edge_energies[0, i, j] + slave.edge_energies[1, j, k] + \
+#				  slave.edge_energies[2, k, l] + slave.edge_energies[3, l, i]
+
+		if energy < min_energy:
+			min_energy = energy
+			min_labels = l_
+	
+	return min_labels, min_energy
 
 def _optimise_cycle(slave):
 	'''
@@ -2243,7 +2284,14 @@ def _optimise_cycle(slave):
 		edge_energies[n, 0:numel_pw] = np.reshape(slave_edge_energies, (numel_pw,), [0, 1, 0])		
 	# The list of the number of labels. 
 	n_labels      = np.zeros_like(slave.n_labels)
-	n_labels[:]   = slave.n_labels
+	n_labels[:]   = slave.n_labels[:]
+
+	# Adjust energies so that the least energy is zero. 
+	n_min = np.min(node_energies)
+	e_min = np.min(edge_energies)
+	o_min = min(n_min, e_min)
+	node_energies -= o_min
+	edge_energies -= o_min
 
 	# Solve the cycle. 
 	labels        = fsc.solver(node_energies, edge_energies, n_labels)
