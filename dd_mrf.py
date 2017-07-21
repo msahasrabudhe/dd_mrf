@@ -931,7 +931,7 @@ class Graph:
 		_max_depth_t = np.log(self.n_nodes/4.0)/avg_degree
 
 		# Now find trees in the remaining adjacency matrix. 
-		subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=-1)		# Just using 2 for now. 
+		subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=2)		# Just using 2 for now. 
 
 		# Finally, add any nodes that do not have any edges connected to them, 
 		#    and place them in slaves of their own. 
@@ -986,27 +986,6 @@ class Graph:
 			# Edge energies
 			edge_energies    = np.zeros((n_edges, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
 			edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
-
-			# Here, we must adjust self.edge_energies before transferring them to a slave. 
-			# This is because self.edge_energies always has energies for an edge from a lower node index
-			#    to a higher node index, but this convention might not be followed in the cycle. 
-#			for _e in range(n_edges):
-#				# Get the edge ID in the Graph. 
-#				e_id     = edge_list[_e]
-#				# Edge end indices in node_list
-#				i0, i1   = _e, (_e+1)%n_nodes
-#				# Get edge ends from the Graph. 
-#				e0, e1   = node_list[i0], node_list[i1]
-#
-#				assert(n_labels[i0] == self.n_labels[e0])
-#				assert(n_labels[i1] == self.n_labels[e1])
-#				
-#				# Now if e0 < e1, we can use the edge energies matrix for this edge, 
-#				#    but in the other case, we must transpose it. 
-#				if e0 < e1:
-#					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e0], 0:self.n_labels[e1]]
-#				else:
-#					edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e1], 0:self.n_labels[e0]].T
 
 			for e in range(n_edges):
 				i0, i1 = e, (e+1)%n_nodes
@@ -1365,8 +1344,11 @@ class Graph:
 				print 'done.',
 			sys.stdout.flush()
 
-			# Compute parameter updates after this round of optimisation. But don't apply them yet!
-			self._compute_param_updates(a_start)
+			# Find the number of disagreeing points. 
+			disagreements = self._find_conflicts()
+
+			# Add to _n_miss_history
+			self._n_miss_history += [disagreements.size]
 
 			# Get the primal cost at this iteration
 			primal_cost     = self._compute_primal_cost()
@@ -1381,11 +1363,8 @@ class Graph:
 				self._best_dual_cost = dual_cost
 			self.dual_costs	+= [dual_cost]
 
-			# Find the number of disagreeing points. 
-			disagreements = self._find_conflicts()
-
-			# Add to _n_miss_history
-			self._n_miss_history += [disagreements.size]
+			# Compute parameter updates after this round of optimisation. But don't apply them yet!
+			self._compute_param_updates(a_start)
 
 			# Verify whether the algorithm has converged. If all slaves agree
 			#    on the labelling of every node, we have convergence. 
@@ -1396,13 +1375,6 @@ class Graph:
 				# Break from loop.
 				converged = True
 				break
-
-#			# If we are supposed to actually maximize ...
-#			if self._maximise:
-#				# Number of factors in the graph. This is equal to the number
-#				#    of edges and the number of nodes. 
-#				n_factors   = self.n_edges + self.n_nodes
-#				primal_cost = n_factors*self._max_pot - primal_cost
 
 			# Test: #TODO
 			# If disagreements are less than or equal to 2, we do a brute force
@@ -1419,16 +1391,11 @@ class Graph:
 			if _verbose:
 				print ' alpha = %10.6f. n_miss = %6d.' %(self.alpha, disagreements.size),
 				print '||dg||**2 = %4.2f, PRIMAL = %6.6f. DUAL = %6.6f, P - D = %6.6f, min(P - D) = %6.6f '\
-				%(self.subgradient_norms[-1], primal_cost, dual_cost, primal_cost-dual_cost, self._best_primal_cost - self._best_dual_cost),
+				%(self.subgradient_norms[-1], primal_cost, dual_cost, primal_cost-dual_cost, self._best_primal_cost - self._best_dual_cost)
 
 			# Increase iteration.
 			self.it += 1
 			it      += 1
-
-			if self.check_decomposition():
-				print 'OK!'
-			else:
-			 	print 'Something wrong wrong!'
 
 		print 'The best labelling is stored as a member \'labels\' in the object.'
 		print 'Best PRIMAL = %.6f, Best DUAL = %.6f, Gap = %.6f' %(self._best_primal_cost, self._best_dual_cost, self._best_primal_cost - self._best_dual_cost)
@@ -1679,7 +1646,6 @@ class Graph:
 			 	# Edge updates have been marked. 
 				n_edges_this_slave = self.slave_list[s_id].n_edges
 				self.slave_list[s_id].edge_energies += alpha*self._slave_edge_up[s_id, :n_edges_this_slave, 0:s_max_n_labels, 0:s_max_n_labels]
-#				self.slave_list[s_id].edge_energies += alpha*np.reshape(self._slave_edge_up[s_id,:n_edges_this_slave,:], [n_edges_this_slave,self.max_n_labels,self.max_n_labels])
 
 		# Copy the subgradient for the next iteration. 
 		self._prv_node_sg[:] = self._slave_node_up[:]
