@@ -31,7 +31,7 @@ decomposition_types = ['tree', 'mixed', 'custom', 'factor']
 
 # Infinity energy. Deliberately introduced to skew primal and dual costs,
 #    so that it is easier to debug when optimisation is buggy. 
-inf_energy = 1e10
+inf_energy = 1e1000
 
 class Slave:
 	'''
@@ -245,10 +245,10 @@ class Graph:
 		self.max_n_labels   = np.max(self.n_labels)
 		
 		# Initialise the node and edge energies. 
-		self.node_energies  = np.zeros((self.n_nodes, self.max_n_labels))
+		self.node_energies  = np.zeros((self.n_nodes, self.max_n_labels), dtype=e_dtype)
 		# Initialise edge energies to allow for maximum number of possible edges. We 
 		#   can later trim this matrix. 
-		self.edge_energies  = np.zeros((self.n_edges, self.max_n_labels, self.max_n_labels))
+		self.edge_energies  = np.zeros((self.n_edges, self.max_n_labels, self.max_n_labels), dtype=e_dtype)
 
 		# Flags set to ensure that node energies have been set. If any energies
 		# 	have not been set, we cannot proceed to optimisation as the graph is not complete. 
@@ -376,7 +376,7 @@ class Graph:
 				n_elements    = 0
 				edge_energies = []
 				while n_elements != n_labels[eend0]*n_labels[eend1]:
-					_next         =  [np.float32(x) for x in fdata[c_line].split(' ')]
+					_next         =  [np.float64(x) for x in fdata[c_line].split(' ')]
 					n_elements    += len(_next)
 					edge_energies += _next
 					c_line        =  c_line + 1
@@ -609,25 +609,26 @@ class Graph:
 		self._check_nodes    = np.where(self._n_slaves_nodes > 1)[0]
 		self._check_edges    = np.where(self._n_slaves_edges > 1)[0]
 
-		# Finally, we must modify the energies for every edge or node depending on 
-		#   how many slaves it is a part of. The energy for a node/edge is distributed
-		#   equally among all slaves. 
-		for n_id in np.where(self._n_slaves_nodes > 1)[0]:
-			# Retrieve all the slaves this node is part of.
-			s_ids	= self.nodes_in_slaves[n_id]
-			# Distribute this node's energy equally between all slaves.
-			for s in s_ids:
-				n_id_in_slave	= self.slave_list[s].node_map[n_id]
-				self.slave_list[s].node_energies[n_id_in_slave, :] /= 1.0*s_ids.size
+		if decomposition is not 'custom':
+			# Finally, we must modify the energies for every edge or node depending on 
+			#   how many slaves it is a part of. The energy for a node/edge is distributed
+			#   equally among all slaves. 
+			for n_id in np.where(self._n_slaves_nodes > 1)[0]:
+				# Retrieve all the slaves this node is part of.
+				s_ids	= self.nodes_in_slaves[n_id]
+				# Distribute this node's energy equally between all slaves.
+				for s in s_ids:
+					n_id_in_slave	= self.slave_list[s].node_map[n_id]
+					self.slave_list[s].node_energies[n_id_in_slave, :] /= 1.0*s_ids.size
 
-		# Doing the same for edges ...
-		for e_id in np.where(self._n_slaves_edges > 1)[0]:
-			# Retrieve all slaves this edge is part of.
-			s_ids	= self.edges_in_slaves[e_id]
-			# Distribute this edge's energy equally between all slaves. 
-			for s in s_ids:
-				e_id_in_slave	= self.slave_list[s].edge_map[e_id]
-				self.slave_list[s].edge_energies[e_id_in_slave, :] /= 1.0*s_ids.size
+			# Doing the same for edges ...
+			for e_id in np.where(self._n_slaves_edges > 1)[0]:
+				# Retrieve all slaves this edge is part of.
+				s_ids	= self.edges_in_slaves[e_id]
+				# Distribute this edge's energy equally between all slaves. 
+				for s in s_ids:
+					e_id_in_slave	= self.slave_list[s].edge_map[e_id]
+					self.slave_list[s].edge_energies[e_id_in_slave, :] /= 1.0*s_ids.size
 
 		# That is it. The slaves are ready. 
 
@@ -881,7 +882,7 @@ class Graph:
 		# Adjust max_length. It is set to 6 by default, because self.n_nodes + 1 is too high, 
 		#    and computationally very expensive. 
 		if max_length == -1:
-			max_length = self.n_nodes + 1
+			max_length = self.n_nodes
 
 #		# The list of cycles. 
 #		cycles = []
@@ -915,13 +916,30 @@ class Graph:
 ##				adj_mat[e1, e0] = False
 
 		# The list of cycles. 
-		cycles = dfs_unique_cycles(adj_mat, max_length=max_length)
-		# Remove edges from the graph that are already in these cycles. 
-#		for c_n in cycles:
-#			for _n in range(len(c_n)):
-#				i0, i1     = _n, (_n+1)%len(c_n)
-#				adj_mat[c_n[i0], c_n[i1]] = False
-#				adj_mat[c_n[i1], c_n[i0]] = False
+		f  = plt.figure(1)
+		plt.subplot(121)
+		plt.imshow(1-adj_mat, cmap='Greys', interpolation='nearest')
+
+		cycles = []
+
+		# Edit: Keep finding cycles till there are no more. 		# Appended: 2017-08-24. 
+		while True:
+			cycles_i = dfs_unique_cycles(adj_mat, max_length=max_length)
+			if len(cycles_i) == 0:
+				break
+			else:
+				cycles += cycles_i
+				# Remove edges from the graph that are already in these cycles. 
+				for c_n in cycles_i:
+					for _n in range(len(c_n)):
+						i0, i1     = _n, (_n+1)%len(c_n)
+						adj_mat[c_n[i0], c_n[i1]] = False
+						adj_mat[c_n[i1], c_n[i0]] = False
+
+#		cycles = dfs_unique_cycles(adj_mat, max_length=max_length)
+		plt.subplot(122)
+		plt.imshow(1-adj_mat, cmap='Greys', interpolation='nearest')
+		plt.show()
 
 		# We would like each tree to have at most a quarter of the
 		#    total nodes in the graph. The depth is hence set as 
@@ -931,7 +949,7 @@ class Graph:
 		_max_depth_t = np.log(self.n_nodes/4.0)/avg_degree
 
 		# Now find trees in the remaining adjacency matrix. 
-		subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=2)		# Just using 2 for now. 
+		subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=-1)		# Just using 2 for now. 
 
 		# Finally, add any nodes that do not have any edges connected to them, 
 		#    and place them in slaves of their own. 
@@ -978,7 +996,7 @@ class Graph:
 				self._max_edges_in_slave = n_edges
 
 			# Node energies
-			node_energies    = inf_energy + np.zeros((n_nodes, s_max_n_labels), dtype=e_dtype)
+			node_energies    = np.zeros((n_nodes, s_max_n_labels), dtype=e_dtype)
 			for _n_id in range(n_nodes):
 				node_energies[_n_id, 0:n_labels[_n_id]] = self.node_energies[node_list[_n_id], 0:n_labels[_n_id]]
 #			node_energies[:] = self.node_energies[node_list, 0:s_max_n_labels]
@@ -2618,6 +2636,21 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 	Start DFS at every node in the graph to find a cycle with maximum length 
 	given by max_length. Very expensive computation.
 	'''
+	def _contained_in(l1, l2):
+		''' 
+		Whether list l2 is contains list l1. Cyclic rotations and reversals allowed. 
+		'''
+		s1, s2 = len(l1), len(l2)
+		if s1 > s2:
+			return False
+		
+		stotal   = s2 + s2
+		ltotal   = l2 + l2
+		for i in range(stotal - s1):
+			if ltotal[i:i+s1] == l1 or ltotal[i:i+s1] == l1[::-1]:
+				return True
+		return False
+
 	n_nodes = adj_mat.shape[0]
 
 	# Parallel processing: find longest cycle for every node independently
@@ -2642,7 +2675,7 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 		# Whether we have already seen a cycle. 
 		_already_seen = False
 		for k_cn in kept_cycles:
-			if np.array_equal(np.sort(k_cn), np.sort(c_n)):
+			if _contained_in(c_n.tolist(), k_cn.tolist()): #np.array_equal(np.sort(k_cn), np.sort(c_n)):
 				# This cycle has already been included. No need to include it again.
 				_already_seen = True
 				break
