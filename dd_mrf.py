@@ -275,7 +275,7 @@ class Graph:
 		fdata = [t.strip() for t in fdata]
 
 		# Remove empty lines. 
-		fdata = [t for t in fdata if t is not '']
+		fdata = [t for t in fdata if t !=  '']
 
 		# The number of lines in the trimmed file. 
 		n_lines = len(fdata)
@@ -609,7 +609,7 @@ class Graph:
 		self._check_nodes    = np.where(self._n_slaves_nodes > 1)[0]
 		self._check_edges    = np.where(self._n_slaves_edges > 1)[0]
 
-		if decomposition is not 'custom':
+		if decomposition != 'custom':
 			# Finally, we must modify the energies for every edge or node depending on 
 			#   how many slaves it is a part of. The energy for a node/edge is distributed
 			#   equally among all slaves. 
@@ -916,9 +916,9 @@ class Graph:
 ##				adj_mat[e1, e0] = False
 
 		# The list of cycles. 
-		f  = plt.figure(1)
-		plt.subplot(121)
-		plt.imshow(1-adj_mat, cmap='Greys', interpolation='nearest')
+#	-	f  = plt.figure(1)
+#	-	plt.subplot(121)
+#	-	plt.imshow(1-adj_mat, cmap='Greys', interpolation='nearest')
 
 		cycles = []
 
@@ -937,9 +937,9 @@ class Graph:
 						adj_mat[c_n[i1], c_n[i0]] = False
 
 #		cycles = dfs_unique_cycles(adj_mat, max_length=max_length)
-		plt.subplot(122)
-		plt.imshow(1-adj_mat, cmap='Greys', interpolation='nearest')
-		plt.show()
+#	-	plt.subplot(122)
+#	-	plt.imshow(1-adj_mat, cmap='Greys', interpolation='nearest')
+#	-	plt.show()
 
 		# We would like each tree to have at most a quarter of the
 		#    total nodes in the graph. The depth is hence set as 
@@ -1260,7 +1260,7 @@ class Graph:
 				print '\'adaptive_delta\' Use adaptive rule which tries to get an improvement of delta at each iteration.'
 				raise ValueError
 			# If strategy is adaptive, we would like a_start to be in (0, 2).
-			if strategy is 'adaptive' and (a_start <= 0 or a_start > 2):
+			if strategy == 'adaptive' and (a_start <= 0 or a_start > 2):
 				print 'Please use 0 < a_start < 2 for an adaptive strategy.'
 				raise ValueError
 	
@@ -1447,7 +1447,7 @@ class Graph:
 			s_id = self._slaves_to_solve[i]
 			self.slave_list[s_id].set_labels(optima[i][0])
 			self.slave_list[s_id]._energy = optima[i][1]
-			if self.slave_list[s_id].struct is 'tree':
+			if self.slave_list[s_id].struct == 'tree':
 				self.slave_list[s_id]._messages    = optima[i][2]
 				self.slave_list[s_id]._messages_in = optima[i][3]
 
@@ -1632,18 +1632,18 @@ class Graph:
 			self._slave_edge_up = (1.0 - self._momentum)*self._slave_edge_up + self._momentum*self._prv_edge_sg
 
 		# Compute the alpha for this step. 
-		if self._optim_strategy is 'step':
+		if self._optim_strategy == 'step':
 			alpha	= a_start/np.sqrt(self.it)
-		elif self._optim_strategy is 'step_ss':
+		elif self._optim_strategy == 'step_ss':
 			alpha   = a_start/(1.0 + self.it)
-		elif self._optim_strategy is 'step_sg':
+		elif self._optim_strategy == 'step_sg':
 			alpha   = a_start/np.sqrt(self.it)
 			alpha   = alpha*1.0/norm_gt
 		elif self._optim_strategy in ['adaptive', 'adaptive_d', 'adaptive_delta']:
 			approx_t	= self._best_primal_cost
 			dual_t		= self.dual_costs[-1]
 			alpha		= a_start*(approx_t - dual_t)/norm_gt
-			if self._optim_strategy is 'adaptive_d':
+			if self._optim_strategy == 'adaptive_d':
 				alpha   = alpha*1.0/np.sqrt(self.it)
 		# Set alpha. 
 		self.alpha = alpha
@@ -1681,7 +1681,7 @@ class Graph:
 			print 'are %d in number. Proceed? (y/n) ' %(disagreements.size),
 			response = raw_input()
 			print 'You said: ' + response + '.'
-		if response is 'n':
+		if response == 'n':
 			return
 	
 		# Get part of the primal solution. 
@@ -1853,7 +1853,7 @@ class Graph:
 		labels = np.zeros(self.n_nodes, dtype=np.int)
 
 		# Iterate over every node. 
-		if self.decomposition is 'tree' and self._primal_strat is 'bp':
+		if self.decomposition == 'tree' and self._primal_strat == 'bp':
 #		if self._primal_strat:			# Adding a method to estimate primals based on ergodic sequences. Commented previous if. 
 			# Use Max product messages to compute the best solution. 
 		
@@ -1895,14 +1895,14 @@ class Graph:
 							node_bel += self.slave_list[s_id]._messages[_e_id, :n_lbl]
 
 				labels[n_id] = np.argmax(node_bel)
-		elif self._primal_strat is 'vote':			# Adding a method to estimate primals based on ergodic sequences. Changed else to elif False. 
+		elif self._primal_strat == 'vote':			# Adding a method to estimate primals based on ergodic sequences. Changed else to elif False. 
 			for n_id in range(self.n_nodes):
 				# Retrieve the labels assigned by every slave to this node. 
 				s_ids    = self.nodes_in_slaves[n_id]
 				s_labels = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
 				# Find the most voted label. 
 				labels[n_id] = np.int(stats.mode(s_labels)[0][0])
-		elif self._primal_strat is 'wsg':
+		elif self._primal_strat == 'wsg':
 			# Get previous solution. self._wsg_accumulator accumulates weighted subgradients for each iteration. 
 			# The weight for a subgradient is just the alpha corresponding to that iteration. 
 			self._wsg_accumulator   += self.alpha*self._sg_node
@@ -1916,7 +1916,7 @@ class Graph:
 			# The resulting labelling is obtained by rounding the solution.
 			labels = np.argmax(self._wsg_nxt_solution, axis=1)
 
-		elif self._primal_strat is 'sg':
+		elif self._primal_strat == 'sg':
 			# Similarly, we have self._sg_accumulator, which does not weigh the subgradients. 
 			self._sg_accumulator    += self._sg_node
 			# The second strategy is to keep accumulating the subgradients and dividing by the
