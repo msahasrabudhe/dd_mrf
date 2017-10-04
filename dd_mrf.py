@@ -1463,37 +1463,43 @@ class Graph:
         '''
         # Extract the list of slaves to be optimised. This contains of all the slaves that
         #   disagree with at least one other slave on the labelling of at least one node. 
+        _to_solve   = [self.slave_list[i] for i in self._slaves_to_solve]
         # The number of cores to use is the number of cores on the machine minus 1. 
         # Use only as many cores as needed. 
         n_cores     = np.min([cpu_count() - 1, self._slaves_to_solve.size])
 
         # Optimise the slaves. 
-# ---   # Using Joblib. 
-#        to_solve   = [self.slave_list[i] for i in self._slaves_to_solve]
+# =================== Using Joblib =====================
 #        optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
+# ======================================================
 
-        # Populate the shared list with slaves to solve. 
-        for i in self._slaves_to_solve:
-            shared_slave_list.append(self.slave_list[i])
-       
-        # Create a pool of workers. 
-        multp_pool  = multiprocessing.Pool(processes=8)
-        # Distribute the evaluation of _optimise_slave_mp over n_cores cores. 
-        optima      = multp_pool.map(_optimise_slave_mp, range(self._slaves_to_solve.size))
-        # Finish the closure. 
-        multp_pool.terminate()
-        # Reset shared_slave_list to zero. We still want shared_slave_list to be 
-        #    the of the type that it is. 
-        del shared_slave_list[:]
+# =============== Using multiprocessing ================
+#        # Refer to the global shared_slave_list
+#        global shared_slave_list
+#        # Populate the shared list with slaves to solve. 
+#        for i in self._slaves_to_solve:
+#            shared_slave_list.append(self.slave_list[i])
+#        
+##        optima = []
+##        for s in shared_slave_list:
+##            optima.append(_optimise_slave(s))
+#       
+#        # Create a pool of workers. 
+#        multp_pool  = multiprocessing.Pool(processes=8)
+#        # Distribute the evaluation of _optimise_slave_mp over n_cores cores. 
+#        optima      = multp_pool.map(_optimise_slave_mp, range(self._slaves_to_solve.size))
+#        # Finish the closure. 
+#        multp_pool.terminate()
+#        # Reset shared_slave_list to zero. We still want shared_slave_list to be 
+#        #    the of the type that it is. 
+#        del shared_slave_list[:]
+# ======================================================
 
-# --- Comment the previous line, and uncomment the following three lines if you wish to solve
-# ---   the slaves sequentially instead of parallelly.
-#        optima = []
-#        for s in _to_solve:
-#            optima.append(_optimise_slave(s))
-
-# --- Using Multiprocessing. Buggy. DO NOT USE. 
-        # Create SyncManager. 
+# ===================== Serially =======================
+        optima = []
+        for s in _to_solve:
+            optima.append(_optimise_slave(s))
+# ======================================================
 
         # Reflect the result in slave list for our Graph. 
         for i in range(self._slaves_to_solve.size):
