@@ -11,6 +11,7 @@ from joblib import Parallel, delayed, cpu_count
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import sys
+import threading
 
 # To create shared numpy arrays using multiprocessing.
 import ctypes
@@ -1571,10 +1572,16 @@ class Graph:
 
         return flag
 
-    
     def _compute_param_updates(self, a_start):
         '''
-        Apply updates to energies after one iteration of the DD-MRF algorithm. 
+        Compute parameter updates for slaves. 
+        Updates are computed after every iteration. 
+        This function calls _compute_param_updates_parallel, or 
+        _compute_param_updates_sequential, based on the number
+        of slaves to be solved. In case they are few in number, 
+        the overhead of starting multiple threads to compute
+        updates to all of them dominates the execution time, and
+        hence it is simpler to compute them sequentially. 
         '''
 
         # Flags to determine whether to solve a slave.
@@ -1592,93 +1599,20 @@ class Graph:
         self._slave_edge_up[:] = 0.0
 
         # Set self._sg_node also to zero. 
-        self._sg_node[:,:]     = 0
+        #self._sg_node[:,:]     = 0
 
         # Mark which slaves need updates. A slave s_id needs update only if self._slave_node_up[s_id] 
         #   has non-zero values in the end.
         self._mark_sl_up[:] = 0
-    
-        # We iterate over nodes and edges which associate with at least two slaves
-        #    and calculate updates to parameters of all slaves. 
-        for n_id in self._check_nodes:
-            # Retrieve the list of slaves that use this node. 
-            s_ids           = self.nodes_in_slaves[n_id]
-            n_slaves_nid    = s_ids.size
-    
-            # Retrieve labels assigned to this point by each slave ...
-            ls_int_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
-            # ... and make them into one-hot vectors. The previous is needed by self._sg_node. 
-            ls_         = np.array([make_one_hot(l_int, self.n_labels[n_id]) for l_int in ls_int_])
-            ls_avg_     = np.mean(ls_, axis=0)
 
-            # Check if all labellings for this node agree. 
-            if np.max(ls_avg_) == 1:
-                # As all vectors are one-hot, this condition being true implies that 
-                #   all slaves assigned the same label to this node (otherwise, the maximum
-                #   number in ls_avg_ would be less than 1).
-                continue
-    
-            # The next step was to iterate over all slaves. We calculate the subgradient here
-            #   given by 
-            #   
-            #    \delta_\lambda^s_p = x^s_p - ls_avg_
-            #
-            #   for all s. s here signifies slaves. 
-            # This can be very easily done with array operations!
-            _node_up    = ls_ - ls_avg_
-
-            # Add to the subgradient, self._sg_node
-            self._sg_node[n_id, :self.n_labels[n_id]] = np.sum(ls_, axis=0)
-    
-            # Find the node ID for n_id in each slave in s_ids. 
-            sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
-    
-            # Mark this update to be done later. 
-            self._slave_node_up[s_ids, sl_nids, :self.n_labels[n_id]]  = _node_up #:self.n_labels[n_id]] = _node_up
-            # Add this value to the subgradient. 
-            norm_gt += np.sum(_node_up**2)
-            # Mark this slave for node updates. 
-            self._mark_sl_up[0, s_ids] = 1
-    
-        # That completes the updates for node energies. Now we move to edge energies. 
-        for e_id in self._check_edges:
-            # Retrieve the list of slaves that use this edge. 
-            s_ids           = self.edges_in_slaves[e_id]
-            n_slaves_eid    = s_ids.size
-    
-            # Retrieve labellings of this edge, assigned by each slave.
-            x, y          = self._node_ids_from_edge_id[e_id,:]
-            ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
-            ls_           = np.array([make_one_hot(l_int, self.n_labels[x], self.n_labels[y]) for l_int in ls_int_])
-            ls_avg_       = np.mean(ls_, axis=0, keepdims=True)
-
-            # Check if all labellings for this node agree. 
-            if np.max(ls_avg_) == 1:
-                # As all vectors are one-hot, this condition being true implies that 
-                #   all slaves assigned the same label to this node (otherwise, the maximum
-                #   number in ls_avg_ would be less than 1).
-                continue    
-
-            # The next step was to iterate over all slaves. We calculate the subgradient here
-            #   given by 
-            #   
-            #    \delta_\lambda^s_p = x^s_p - ls_avg_
-            #
-            #   for all s. s here signifies slaves. 
-            # This can be very easily done with array operations!
-            _edge_up    = ls_ - ls_avg_
-    
-            # Find the edge ID for e_id in each slave in s_ids. 
-            sl_eids = [self.slave_list[s].edge_map[e_id] for s in s_ids]
-    
-            # Mark this update to be done later. 
-            self._slave_edge_up[s_ids, sl_eids, :self.n_labels[x], :self.n_labels[y]] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
+        # How many slaves are to be solved?
+        n_slaves_to_solve = self._slaves_to_solve.size
+        # A simple heuristic. 
+        if n_slaves_to_solve > 500000:
+            norm_gt = self._compute_param_updates_parallel(a_start)
+        else:
+            norm_gt = self._compute_param_updates_sequential(a_start)
             
-            # Add this value to the subgradient. 
-            norm_gt += np.sum(_edge_up**2)
-            # Mark this slave for edge updates. 
-            self._mark_sl_up[1, s_ids] = 1
-
         # Reset the slaves to solve. 
         self._slaves_to_solve = np.where(np.sum(self._mark_sl_up, axis=0)!=0)[0].astype(n_dtype)
 
@@ -1706,6 +1640,223 @@ class Graph:
                 alpha   = alpha*1.0/np.sqrt(self.it)
         # Set alpha. 
         self.alpha = alpha
+
+
+    def _compute_param_updates_parallel(self, a_start):
+        ''' 
+        Compute parameter updates for slaves, in a parallel manner. 
+        '''
+
+        # How many nodes and edges to check for updates. 
+        _n_check_nodes = self._check_nodes.size
+        _n_check_edges = self._check_edges.size
+
+        # An array to store the contributions to the norm of the 
+        #   subgradient from each node and edge. 
+        arr_norm_gt    = np.zeros(_n_check_nodes + _n_check_edges)
+        # Concatenate indices for check nodes and check edges. 
+        concat_indices = np.concatenate((self._check_nodes, self._check_edges))
+
+        # Define a function to compute updates for nodes. 
+        def node_updates(n_con, n_id):
+            # Retrieve the list of slaves that use this node. 
+            s_ids           = self.nodes_in_slaves[n_id]
+            n_slaves_nid    = s_ids.size
+    
+            # Retrieve labels assigned to this point by each slave ...
+            ls_int_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+            nl_n        = self.n_labels[n_id]
+            # ... and make them into one-hot vectors. The previous is needed by self._sg_node. 
+            ls_         = np.array([make_one_hot(l_int, nl_n) for l_int in ls_int_])
+            ls_avg_     = np.mean(ls_, axis=0)
+
+            # Check if all labellings for this node agree. 
+            if np.max(ls_avg_) == 1:
+                # As all vectors are one-hot, this condition being true implies that 
+                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   number in ls_avg_ would be less than 1).
+                return
+    
+            # The next step was to iterate over all slaves. We calculate the subgradient here
+            #   given by 
+            #   
+            #    \delta_\lambda^s_p = x^s_p - ls_avg_
+            #
+            #   for all s. s here signifies slaves. 
+            # This can be very easily done with array operations!
+            _node_up    = ls_ - ls_avg_
+
+            # Add to the subgradient, self._sg_node
+            #self._sg_node[n_id, :self.n_labels[n_id]] = np.sum(ls_, axis=0)
+    
+            # Find the node ID for n_id in each slave in s_ids. 
+            sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
+    
+            # Mark this update to be done later. 
+            self._slave_node_up[s_ids, sl_nids, :nl_n]  = _node_up #:self.n_labels[n_id]] = _node_up
+            # Add this value to the subgradient. 
+            arr_norm_gt[n_con] = np.sum(_node_up**2)
+            # Mark this slave for node updates. 
+            self._mark_sl_up[0, s_ids] = 1
+    
+        # That completes the updates for node energies. Now we move to edge energies. 
+        def edge_updates(e_con, e_id):
+            # Retrieve the list of slaves that use this edge. 
+            s_ids           = self.edges_in_slaves[e_id]
+            n_slaves_eid    = s_ids.size
+
+            # Retrieve labellings of this edge, assigned by each slave.
+            x, y          = self._node_ids_from_edge_id[e_id,:]
+            # n_lables for x and y
+            nl_x, nl_y    = self.n_labels[x], self.n_labels[y]
+            ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
+            ls_           = np.array([make_one_hot(l_int, nl_x, nl_y) for l_int in ls_int_])
+            ls_avg_       = np.mean(ls_, axis=0, keepdims=True)
+
+            # Check if all labellings for this node agree. 
+            if np.max(ls_avg_) == 1:
+                # As all vectors are one-hot, this condition being true implies that 
+                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   number in ls_avg_ would be less than 1).
+                return 
+
+            # The next step was to iterate over all slaves. We calculate the subgradient here
+            #   given by 
+            #   
+            #    \delta_\lambda^s_p = x^s_p - ls_avg_
+            #
+            #   for all s. s here signifies slaves. 
+            # This can be very easily done with array operations!
+            _edge_up    = ls_ - ls_avg_
+    
+            # Find the edge ID for e_id in each slave in s_ids. 
+            sl_eids = [self.slave_list[s].edge_map[e_id] for s in s_ids]
+    
+            # Mark this update to be done later. 
+            self._slave_edge_up[s_ids, sl_eids, :nl_x, :nl_y] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
+            
+            # Add this value to the subgradient. 
+            arr_norm_gt[e_con + _n_check_nodes] = np.sum(_edge_up**2)
+            # Mark this slave for edge updates. 
+            self._mark_sl_up[1, s_ids] = 1
+
+        # We iterate over nodes and edges which associate with at least two slaves
+        #    and calculate updates to parameters of all slaves. 
+        # Create threads to solve this problem. 
+        threads = []
+        for n in range(_n_check_nodes):
+            t = threading.Thread(target=node_updates, args=(n, self._check_nodes[n],))
+            threads.append(t)
+        for e in range(_n_check_edges):
+            t = threading.Thread(target=edge_updates, args=(e, self._check_edges[e],))
+            threads.append(t)
+
+        # Launch these threads ...
+        for t in threads:
+            t.start()
+        #  ... and synchronise. 
+        for t in threads:
+            t.join()
+        
+        # The total subgradient norm.
+        norm_gt = np.sum(arr_norm_gt)
+        # Return the norm of the subgradient. 
+        return norm_gt
+    
+    def _compute_param_updates_sequential(self, a_start):
+        '''
+        Compute parameter updates for slaves, in a sequential manner. 
+        '''
+
+        # Subgradient norm. 
+        norm_gt = 0.0
+
+        # We iterate over nodes and edges which associate with at least two slaves
+        #    and calculate updates to parameters of all slaves. 
+        for n_id in self._check_nodes:
+            # Retrieve the list of slaves that use this node. 
+            s_ids           = self.nodes_in_slaves[n_id]
+            n_slaves_nid    = s_ids.size
+    
+            # Retrieve labels assigned to this point by each slave ...
+            ls_int_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+            nl_n        = self.n_labels[n_id]
+            # ... and make them into one-hot vectors. The previous is needed by self._sg_node. 
+            ls_         = np.array([make_one_hot(l_int, nl_n) for l_int in ls_int_])
+            ls_avg_     = np.mean(ls_, axis=0)
+
+            # Check if all labellings for this node agree. 
+            if np.max(ls_avg_) == 1:
+                # As all vectors are one-hot, this condition being true implies that 
+                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   number in ls_avg_ would be less than 1).
+                continue
+    
+            # The next step was to iterate over all slaves. We calculate the subgradient here
+            #   given by 
+            #   
+            #    \delta_\lambda^s_p = x^s_p - ls_avg_
+            #
+            #   for all s. s here signifies slaves. 
+            # This can be very easily done with array operations!
+            _node_up    = ls_ - ls_avg_
+
+            # Add to the subgradient, self._sg_node
+            #self._sg_node[n_id, :self.n_labels[n_id]] = np.sum(ls_, axis=0)
+    
+            # Find the node ID for n_id in each slave in s_ids. 
+            sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
+    
+            # Mark this update to be done later. 
+            self._slave_node_up[s_ids, sl_nids, :nl_n]  = _node_up #:self.n_labels[n_id]] = _node_up
+            # Add this value to the subgradient. 
+            norm_gt += np.sum(_node_up**2)
+            # Mark this slave for node updates. 
+            self._mark_sl_up[0, s_ids] = 1
+    
+        # That completes the updates for node energies. Now we move to edge energies. 
+        for e_id in self._check_edges:
+            # Retrieve the list of slaves that use this edge. 
+            s_ids           = self.edges_in_slaves[e_id]
+            n_slaves_eid    = s_ids.size
+    
+            # Retrieve labellings of this edge, assigned by each slave.
+            x, y          = self._node_ids_from_edge_id[e_id,:]
+            nl_x, nl_y    = self.n_labels[x], self.n_labels[y]
+            ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
+            ls_           = np.array([make_one_hot(l_int, nl_x, nl_y) for l_int in ls_int_])
+            ls_avg_       = np.mean(ls_, axis=0, keepdims=True)
+
+            # Check if all labellings for this node agree. 
+            if np.max(ls_avg_) == 1:
+                # As all vectors are one-hot, this condition being true implies that 
+                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   number in ls_avg_ would be less than 1).
+                continue    
+
+            # The next step was to iterate over all slaves. We calculate the subgradient here
+            #   given by 
+            #   
+            #    \delta_\lambda^s_p = x^s_p - ls_avg_
+            #
+            #   for all s. s here signifies slaves. 
+            # This can be very easily done with array operations!
+            _edge_up    = ls_ - ls_avg_
+    
+            # Find the edge ID for e_id in each slave in s_ids. 
+            sl_eids = [self.slave_list[s].edge_map[e_id] for s in s_ids]
+    
+            # Mark this update to be done later. 
+            self._slave_edge_up[s_ids, sl_eids, :nl_x, :nl_y] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
+            
+            # Add this value to the subgradient. 
+            norm_gt += np.sum(_edge_up**2)
+            # Mark this slave for edge updates. 
+            self._mark_sl_up[1, s_ids] = 1
+
+        # Return the norm of the subgradient. 
+        return norm_gt
+
 
     def _apply_param_updates_parallel(self):
         # Apply parameter updates in parallel. Use multiprocessing to create
