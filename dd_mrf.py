@@ -12,6 +12,9 @@ import scipy.stats as stats
 import matplotlib.pyplot as plt
 import sys
 
+# To create shared numpy arrays using multiprocessing.
+import ctypes
+
 # Max product belief propagation on trees. 
 import bp           
 
@@ -21,8 +24,19 @@ import fast_cycle_solver as fsc
 # C++ implememtation of DFS cycle searching. 
 from dfs_cycle import find_cycle
 
+#  --- DTYPES ---
 # The dtype to use to store energies. 
 e_dtype = np.float64
+# The dtype to use for labels. That is to say, labels will be stored as this dtype. 
+l_dtype = np.int16  
+# The dtype to use for node and edge indices
+n_dtype = np.int32
+# The dtype used when booleans are needed as ints. Should use only 1 byte.
+m_dtype = np.int8
+# The dtype used for updates to slave energies. These updates are usually small.
+# --- Using float64 here anyway, because ctypes.c_float apparently results in 64 bit
+#     floats, when it should actually result in 32 bit ones.
+u_dtype = np.float64
 
 # List of slave types handled by this module. 
 slave_types         = ['free_node', 'free_edge', 'cell', 'tree', 'cycle']
@@ -32,6 +46,14 @@ decomposition_types = ['tree', 'mixed', 'custom', 'factor']
 # Infinity energy. Deliberately introduced to skew primal and dual costs,
 #    so that it is easier to debug when optimisation is buggy. 
 inf_energy = 1e1000
+
+# Create a multiprocessing.Manager() object for shared lists. 
+# This shared list shall be used to record the slaves to be solved. 
+#    and shall be used in the function _optimise_slave_mp()
+#    to solve slaves in parallel. 
+manager           = multiprocessing.Manager()
+# Create a shared list which can be used to access the slave list across processes. 
+shared_slave_list = manager.list()
 
 class Slave:
     '''
@@ -109,7 +131,7 @@ class Slave:
         '''
         Slave.set_labels(): Set the labelling for a slave
         '''
-        self.labels = np.array(labels, dtype=np.int)
+        self.labels = np.array(labels, dtype=l_dtype)
 
         # Also maintain a dictionary to easily fetch the label 
         #   given a node ID.
@@ -231,16 +253,16 @@ class Graph:
 
         # Create maps: V x V -> E and E -> V x V. 
         # These give us the edge ID given two end-points, and vice-versa, respectively. 
-        self._edge_id_from_node_ids = np.zeros((self.n_nodes, self.n_nodes), dtype=np.int)
-        self._node_ids_from_edge_id = np.zeros((self.n_edges, 2), dtype=np.int)
+        self._edge_id_from_node_ids = np.zeros((self.n_nodes, self.n_nodes), dtype=n_dtype)
+        self._node_ids_from_edge_id = np.zeros((self.n_edges, 2), dtype=n_dtype)
 
         # To set the maximum number of labels, we consider what kind of input is n_labels. 
         # If n_labels is an integer, we assume that all nodes should get the same max_n_labels.
         # Another option is to specify a list of max_n_labels. 
         if type(n_labels) == np.int:
-            self.n_labels   = n_labels + np.zeros(self.n_nodes).astype(np.int)
+            self.n_labels   = n_labels + np.zeros(self.n_nodes).astype(l_dtype)
         elif np.array(n_labels).size == self.n_nodes:
-            self.n_labels   = np.array(n_labels).astype(np.int)
+            self.n_labels   = np.array(n_labels).astype(l_dtype)
         # In any case, the max n labels for this Graph is np.max(self.n_lables)
         self.max_n_labels   = np.max(self.n_labels)
         
@@ -506,8 +528,8 @@ class Graph:
 #           raise ValueError
 
         # Convert indices to int, just in case ...
-        i = np.int(i)
-        j = np.int(j)
+        i = n_dtype(i)
+        j = n_dtype(j)
 
         # Check that the supplied energy has the correct shape. 
         input_shape     = list(energies.shape)
@@ -571,14 +593,14 @@ class Graph:
         self._max_edges_in_slave = 0
 
         # Create a closure to handle the required input of max_depth to self._create_tree_slaves(). 
-        def _make_create_tree_slaves(md):
+        def _make_create_tree_slaves(md,sl):
             def h():
-                return self._create_tree_slaves(max_depth=md)
+                return self._create_tree_slaves(max_depth=md, slave_list=sl)
             return h
         # Create a closure to handle the required input of max_depth to self._create_mixed_slaves().
         def _make_create_mixed_slaves(md,sl):
             def h():
-                return self._create_mixed_slaves(max_length=md, slave_list=slave_list)
+                return self._create_mixed_slaves(max_length=md, slave_list=sl)
             return h
         # Create a closure to handle the required input of slave_list to self._create_custom_slaves().
         def _make_create_custom_slaves(sl):
@@ -589,7 +611,7 @@ class Graph:
         # Functions to call depending on which slave is chosen
         _slave_funcs = {
             'factor':  self._create_factor_slaves,
-            'tree':    _make_create_tree_slaves(max_depth),
+            'tree':    _make_create_tree_slaves(max_depth, slave_list),
             'mixed':   _make_create_mixed_slaves(max_depth, slave_list),
             'custom':  _make_create_custom_slaves(slave_list)
         }
@@ -603,8 +625,8 @@ class Graph:
 
         # Two variables to hold how many slaves each node and edge is contained in (instead
         #   of computing the size of the corresponding vector each time. 
-        self._n_slaves_nodes = np.array([self.nodes_in_slaves[n].size for n in range(self.n_nodes)], dtype=np.int)
-        self._n_slaves_edges = np.array([self.edges_in_slaves[e].size for e in range(self.n_edges)], dtype=np.int)
+        self._n_slaves_nodes = np.array([self.nodes_in_slaves[n].size for n in range(self.n_nodes)], dtype=n_dtype)
+        self._n_slaves_edges = np.array([self.edges_in_slaves[e].size for e in range(self.n_edges)], dtype=n_dtype)
         # Initially, we need only check those nodes and edges which associate with at least two slaves. 
         self._check_nodes    = np.where(self._n_slaves_nodes > 1)[0]
         self._check_edges    = np.where(self._n_slaves_edges > 1)[0]
@@ -725,7 +747,7 @@ class Graph:
         # That's it. 
 
 
-    def _create_tree_slaves(self, max_depth=5):
+    def _create_tree_slaves(self, max_depth=5, slave_list=None):
         '''
         Graph._create_tree_slaves: Create a list of tree-structured sub-problems. 
         Trees is detected in a greedy manner starting at the first node. 
@@ -740,8 +762,11 @@ class Graph:
         self._max_nodes_in_slave = 0
         self._max_edges_in_slave = 0
 
-        # Create adjacency matrices. 
-        subtree_data = self._generate_trees_greedy(max_depth=max_depth)
+        if slave_list is None:
+            # Create adjacency matrices. 
+            subtree_data = self._generate_trees_greedy(max_depth=max_depth)
+        else:
+            subtree_data = slave_list
 
         # Create free_node slaves: these contain nodes that do not have
         #    any edges incident on them. 
@@ -758,15 +783,15 @@ class Graph:
         for s_id in range(n_trees):
             # Extract the adjacency matrices for this slave. 
             tree_adj  = subtree_data[s_id][0]
-            node_list = np.array(subtree_data[s_id][1], dtype=np.int)
-            edge_list = np.array(subtree_data[s_id][2], dtype=np.int)
+            node_list = np.array(subtree_data[s_id][1], dtype=n_dtype)
+            edge_list = np.array(subtree_data[s_id][2], dtype=n_dtype)
 
             # Number of nodes and edges in this tree. 
             n_nodes = node_list.size
             n_edges = edge_list.size
 
             # The number of labels for each node here. 
-            n_labels         = np.zeros(n_nodes, dtype=np.int)
+            n_labels         = np.zeros(n_nodes, dtype=l_dtype)
             n_labels[:]      = self.n_labels[node_list]
 
             # The maximum cardinality of a node in this slave. 
@@ -973,7 +998,7 @@ class Graph:
         self.n_slaves = n_cycles + n_trees + n_free_nodes
 
         # Create slave list. 
-        self.slave_list = [Slave() for s in range(self.n_slaves)]
+        self.slave_list = np.array([Slave() for s in range(self.n_slaves)])
 
         # Make cycle slaves first. 
         for s_id in range(n_cycles):
@@ -981,7 +1006,7 @@ class Graph:
             c_n = cycles[s_id]
 
             # Make node and edge lists. 
-            node_list = np.array(c_n, dtype=np.int)
+            node_list = np.array(c_n, dtype=n_dtype)
             edge_list = np.zeros_like(node_list)
 
             # Number of nodes and edges. 
@@ -994,7 +1019,7 @@ class Graph:
                 edge_list[i] = e_id
 
             # The number of labels for nodes in this slave. 
-            n_labels       = np.zeros(n_nodes, dtype=np.int)
+            n_labels       = np.zeros(n_nodes, dtype=l_dtype)
             n_labels[:]    = self.n_labels[node_list]
 
             # Max label for this slave. 
@@ -1047,15 +1072,15 @@ class Graph:
 
             # Extract the adjacency matrices for this slave. 
             tree_adj  = subtree_data[t_id][0]
-            node_list = np.array(subtree_data[t_id][1], dtype=np.int)
-            edge_list = np.array(subtree_data[t_id][2], dtype=np.int)
+            node_list = np.array(subtree_data[t_id][1], dtype=n_dtype)
+            edge_list = np.array(subtree_data[t_id][2], dtype=n_dtype)
 
             # Number of nodes and edges in this tree. 
             n_nodes = node_list.size
             n_edges = edge_list.size
 
             # The number of labels for each node here. 
-            n_labels         = np.zeros(n_nodes, dtype=np.int)
+            n_labels         = np.zeros(n_nodes, dtype=l_dtype)
             n_labels[:]      = self.n_labels[node_list]
 
             # Max label for this slave. 
@@ -1315,15 +1340,15 @@ class Graph:
     
             # Create update variables for slaves. Created once, reset to zero each time
             #   _compute_param_updates() and _apply_param_updates() are called. 
-            self._slave_node_up = np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels))
-            self._slave_edge_up = np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels, self.max_n_labels))
+            self._slave_node_up = np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels), dtype=u_dtype)
+            self._slave_edge_up = np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels, self.max_n_labels), dtype=u_dtype)
             # Create a copy of these to hold the previous state update. Akin to momentum
             #   update used in NNs. 
             self._prv_node_sg   = np.zeros_like(self._slave_node_up)
             self._prv_edge_sg   = np.zeros_like(self._slave_edge_up)
             # Array to mark slaves for updates. 
             # The first row corresponds to node updates, while the second to edge updates. 
-            self._mark_sl_up    = np.zeros((2,self.n_slaves), dtype=np.bool)
+            self._mark_sl_up    = np.zeros((2,self.n_slaves), dtype=np.int8)
     
             # How much momentum to use. Must be in [0, 1)
             self._momentum = _momentum
@@ -1349,7 +1374,7 @@ class Graph:
             # Accumulator for alpha. 
             self._alpha_accumulator = 0.0
             # Stores the current subgradient, but not in terms of one-hot vectors. 
-            self._sg_node           = np.zeros((self.n_nodes, self.max_n_labels), dtype=np.int)
+            self._sg_node           = np.zeros((self.n_nodes, self.max_n_labels), dtype=l_dtype)
 
             # The iteration in the optimisation process. This is stored as a member of the class so that
             #     continuing optimisation after it has stopped is easier. 
@@ -1438,22 +1463,37 @@ class Graph:
         '''
         # Extract the list of slaves to be optimised. This contains of all the slaves that
         #   disagree with at least one other slave on the labelling of at least one node. 
-        _to_solve   = [self.slave_list[i] for i in self._slaves_to_solve]
         # The number of cores to use is the number of cores on the machine minus 1. 
         # Use only as many cores as needed. 
-        n_cores     = np.min([cpu_count() - 1, len(_to_solve)])
+        n_cores     = np.min([cpu_count() - 1, self._slaves_to_solve.size])
 
         # Optimise the slaves. 
-        # Using Joblib. 
-        optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
+# ---   # Using Joblib. 
+#        to_solve   = [self.slave_list[i] for i in self._slaves_to_solve]
+#        optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
+
+        # Populate the shared list with slaves to solve. 
+        for i in self._slaves_to_solve:
+            shared_slave_list.append(self.slave_list[i])
+       
+        # Create a pool of workers. 
+        multp_pool  = multiprocessing.Pool(processes=8)
+        # Distribute the evaluation of _optimise_slave_mp over n_cores cores. 
+        optima      = multp_pool.map(_optimise_slave_mp, range(self._slaves_to_solve.size))
+        # Finish the closure. 
+        multp_pool.terminate()
+        # Reset shared_slave_list to zero. We still want shared_slave_list to be 
+        #    the of the type that it is. 
+        del shared_slave_list[:]
+
 # --- Comment the previous line, and uncomment the following three lines if you wish to solve
 # ---   the slaves sequentially instead of parallelly.
-#       optima = []
-#       for s in _to_solve:
-#           optima += [_optimise_slave(s)]
+#        optima = []
+#        for s in _to_solve:
+#            optima.append(_optimise_slave(s))
+
 # --- Using Multiprocessing. Buggy. DO NOT USE. 
-#       _multp = multiprocessing.Pool(n_cores)
-#       optima = _multp.map(_optimise_slave, _to_solve)
+        # Create SyncManager. 
 
         # Reflect the result in slave list for our Graph. 
         for i in range(self._slaves_to_solve.size):
@@ -1546,11 +1586,11 @@ class Graph:
         self._slave_edge_up[:] = 0.0
 
         # Set self._sg_node also to zero. 
-        self._sg_node[:,:]     = 0.0
+        self._sg_node[:,:]     = 0
 
         # Mark which slaves need updates. A slave s_id needs update only if self._slave_node_up[s_id] 
         #   has non-zero values in the end.
-        self._mark_sl_up[:] = False
+        self._mark_sl_up[:] = 0
     
         # We iterate over nodes and edges which associate with at least two slaves
         #    and calculate updates to parameters of all slaves. 
@@ -1592,7 +1632,7 @@ class Graph:
             # Add this value to the subgradient. 
             norm_gt += np.sum(_node_up**2)
             # Mark this slave for node updates. 
-            self._mark_sl_up[0, s_ids] = True
+            self._mark_sl_up[0, s_ids] = 1
     
         # That completes the updates for node energies. Now we move to edge energies. 
         for e_id in self._check_edges:
@@ -1631,10 +1671,10 @@ class Graph:
             # Add this value to the subgradient. 
             norm_gt += np.sum(_edge_up**2)
             # Mark this slave for edge updates. 
-            self._mark_sl_up[1, s_ids] = True
+            self._mark_sl_up[1, s_ids] = 1
 
         # Reset the slaves to solve. 
-        self._slaves_to_solve = np.where(np.sum(self._mark_sl_up, axis=0)!=0)[0]
+        self._slaves_to_solve = np.where(np.sum(self._mark_sl_up, axis=0)!=0)[0].astype(n_dtype)
 
         # Record the norm of the subgradient. 
         self.subgradient_norms += [norm_gt]
@@ -1660,6 +1700,42 @@ class Graph:
                 alpha   = alpha*1.0/np.sqrt(self.it)
         # Set alpha. 
         self.alpha = alpha
+
+    def _apply_param_updates_parallel(self):
+        # Apply parameter updates in parallel. Use multiprocessing to create
+        #    processes which share memory, and hence do not incur an overhead
+        #    of memory coping. 
+        
+        # Retrieve alpha first. 
+        alpha = self.alpha
+
+        # Create a manager to share 
+        #   * self.slave_list
+        #   * self._slave_node_up
+        #   * self._slave_edge_up
+        #   # self._mark_sl_up
+        manager_sl  = multiprocessing.Manager()
+
+        # Create objects to handle memory sharing. 
+        shared_sl   = manager_sl.list()
+        # Add slaves to shared list. 
+        for i in range(self.n_slaves):
+            shared_sl.append(self.slave_list[i])
+
+        # Create shared array for self._slave_node_up
+        _sh_sne     = multiprocessing.Array(ctypes.c_float, self.n_slaves*self._max_nodes_in_slave, self.max_n_labels)
+
+        # Create shared array for self._slave_edge_up
+        _sh_see     = multiprocessing.Array(ctypes.c_float, self.n_slaves*self._max_nodes_in_slave, self.max_n_labels*self.max_n_labels)
+
+        # Create shared array for self._mark_sl_up
+        _sh_msl     = multiprocessing.Array(ctypes.c_byte,  2*self.n_slaves)
+
+        # Make numpy arrays and ask them to share memory with these multiprocessing arrays.
+#        _sh_sne_np  = np.frombuffer(_sh_sne.get_obj())
+#        shared_sne  = _sh_sne_np.reshape((self.n_slaves, self._max_nodes_in_slave
+#            iself._slave_node_up = np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels), dtype=u_dtype)
+        
 
     def _apply_param_updates(self):
         # Retrieve alpha
@@ -1816,7 +1892,7 @@ class Graph:
                 node_conflicts[n_id] = True
 
         # Update self._check_nodes to find only those nodes where a disagreement exists. 
-        self._check_nodes = np.where(node_conflicts == True)[0].astype(np.int)
+        self._check_nodes = np.where(node_conflicts == True)[0].astype(n_dtype)
         # Find disagreeing edges. We iterate over self._check_nodes, and add all 
         #    neighbours of a node in _check_nodes. 
         for i in range(self._check_nodes.size):
@@ -1826,7 +1902,7 @@ class Graph:
             edge_conflicts[e_neighs] = True
 
         # Update self._check_edges to reflect to be only these edges. 
-        self._check_edges = np.where(edge_conflicts == True)[0].astype(np.int)
+        self._check_edges = np.where(edge_conflicts == True)[0].astype(n_dtype)
         # Return disagreeing nodes. 
         return self._check_nodes
 
@@ -1863,7 +1939,7 @@ class Graph:
         Estimate a primal solution from the obtained dual solutions. 
         This strategy uses the most voted label for every node. 
         '''
-        labels = np.zeros(self.n_nodes, dtype=np.int)
+        labels = np.zeros(self.n_nodes, dtype=l_dtype)
 
         # Iterate over every node. 
         if self.decomposition == 'tree' and self._primal_strat == 'bp':
@@ -1914,7 +1990,7 @@ class Graph:
                 s_ids    = self.nodes_in_slaves[n_id]
                 s_labels = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
                 # Find the most voted label. 
-                labels[n_id] = np.int(stats.mode(s_labels)[0][0])
+                labels[n_id] = n_dtype(stats.mode(s_labels)[0][0])
         elif self._primal_strat == 'wsg':
             # Get previous solution. self._wsg_accumulator accumulates weighted subgradients for each iteration. 
             # The weight for a subgradient is just the alpha corresponding to that iteration. 
@@ -2216,12 +2292,6 @@ def _optimise_tree(slave):
     return labels, energy, messages, messages_in
 # ---------------------------------------------------------------------------------------
 
-def optimise_cycle2(slave):
-    return _optimise_cycle2(slave)
-
-def optimise_cycle(slave):
-    return _optimise_cycle(slave)
-
 def _optimise_cycle2(slave):
     ''' Proxy: optimise four node cycle '''
     all_labellings = _generate_label_permutations(slave.n_labels)
@@ -2280,7 +2350,7 @@ def _optimise_cycle(slave):
         # [0, 1, 0] needed in np.reshape because Wang's code assumes column-first ordering!
         edge_energies[n, 0:numel_pw] = np.reshape(slave_edge_energies, (numel_pw,), [0, 1, 0])      
     # The list of the number of labels. 
-    n_labels      = np.zeros_like(slave.n_labels)
+    n_labels      = np.zeros_like(slave.n_labels).astype(np.int)        # Again, the Python wrapper requires np.int!
     n_labels[:]   = slave.n_labels[:]
 
     # Adjust energies so that the least energy is zero. 
@@ -2336,6 +2406,13 @@ by Slave._compute_energy(), which is %g. The labels are [%d, %d, %d, %d]' \
 
     # Everything is okay.
     return True, s
+
+# ---------------------------------------------------------------------------------------
+# Use shared list shared_slave_list to optimise slaves. 
+def _optimise_slave_mp(i):
+    s   = shared_slave_list[i]
+    ret = _optimise_slave(s)
+    return ret
 
 # ---------------------------------------------------------------------------------------
 
@@ -2503,7 +2580,7 @@ def _generate_tree_with_root(_in):
         queue += _next_nodes    
 
     # The node list can be obtained directly from visited. 
-    node_list = np.where(visited == True)[0].astype(np.int)
+    node_list = np.where(visited == True)[0].astype(n_dtype)
 
 
     # Make adjacency matrix symmetric. 
@@ -2671,10 +2748,12 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
     n_cores = np.min([n_nodes, cpu_count() - 1])
 
     # Create inputs: 
-    adj_mat_int = adj_mat.astype(np.int)
+    adj_mat_int = adj_mat.astype(np.int)        # Can't skip np.int here! The C program requires np.int
     _inputs = [[adj_mat_int, _n, max_length] for _n in range(n_nodes)]
 
     # Run the algorithm. 
+# ---------------------------------------------------
+    # Using JOBLIB. 
 #   list_cycles = Parallel(n_jobs=n_cores)(delayed(dfs_cycle_)(_in) for _in in _inputs)
     list_cycles = Parallel(n_jobs=n_cores)(delayed(find_cycle_)(_in) for _in in _inputs)
 
@@ -2697,6 +2776,27 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 
     # Return the list of cycles. 
     return kept_cycles
+# ---------------------------------------------------
+
+    # Doing sequentially, as JOBLIB seems to be very expensive!
+#    list_cycles  = []
+#    while True:
+#        _cycles_found = False
+#        for _n in range(n_nodes):
+#            c_n = find_cycle(adj_mat_int, _n, max_length)
+#            _already_seen = False
+#            for k_cn in list_cycles:
+#                if _contained_in(c_n.tolist(), k_cn.tolist()):
+#                    _already_seen = True
+#                    break
+#            if not _already_seen:
+#                list_cycles += [c_n]
+#                _cycles_found = True
+#        if not _cycles_found:
+#            break  
+#
+#    return list_cycles
+
 
 # ---------------------------------------------------------------------------------------
 def find_cycle_(_in):
