@@ -42,7 +42,7 @@ u_dtype = np.float64
 # List of slave types handled by this module. 
 slave_types         = ['free_node', 'free_edge', 'cell', 'tree', 'cycle']
 # List of allowed graph decompositions.
-decomposition_types = ['tree', 'mixed', 'custom', 'factor']
+decomposition_types = ['tree', 'spanning_trees', 'mixed', 'custom', 'factor']
 
 # Infinity energy. Deliberately introduced to skew primal and dual costs,
 #    so that it is easier to debug when optimisation is buggy. 
@@ -157,15 +157,32 @@ class Slave:
         Optimise this slave. 
         '''
         if self.struct == 'cell':
-            return _optimise_4node_slave(self)
+            _l, _e =  _optimise_4node_slave(self)
+            self.labels  = _l
+            self._energy = _e
+            return _l, _e
+
         elif self.struct == 'tree':
-            return _optimise_tree(self)
+            _l, _e, _m, _m_in = _optimise_tree(self)
+            self.labels       = _l
+            self._energy      = _e
+            self._messages    = _m
+            self._messages_in = _m_min
+            return _l, _e, _m, _m_min
+
         elif self.struct == 'cycle':
-            return _optimise_cycle(self)
+            _l, _e       = _optimise_cycle(self)
+            self.labels  = _l
+            self._energy = _e
+            return _l, _e
+
         elif self.struct == 'free_node':
             # Simply return the label with the least energy.
-            nl = np.argmin(self.node_energies)
+            nl           = np.argmin(self.node_energies)
+            self.labels  = [nl]
+            self._energy = self.node_energies[0,nl]
             return [nl], self.node_energies[0,nl]
+
         elif self.struct == 'free_edge':
             # Get all labellings of the two nodes involved. 
             _labels = _generate_label_permutations(self.n_labels)
@@ -180,6 +197,9 @@ class Slave:
                 if _energy < min_energy:
                     min_energy = _energy
                     min_labels = [lx, ly]
+            # Update class members. 
+            self.labels  = min_labels
+            self._energy = min_energy
             # Return the minimum energy. 
             return min_labels, min_energy
                 
@@ -578,7 +598,12 @@ class Graph:
         and then decompose the rest of the graph into trees. 
         If decomposition is 'tree', create a set of trees
         instead by searching for trees in a greedy manner, starting at every node that
-        still has edges which are not yet in any tree. 
+        still has edges which are not yet in any tree. Generated trees are not 
+        guaranteed to be spanning trees. 
+        If decomposition is 'spanning_trees', the program tries to find 
+        a decomposition of the graph into spanning trees. The trees are generated
+        starting from a random node, and tree generation stops once 
+        all edges and nodes are accounted for. 
         If decomposition is 'custom', the user can specify a custom decomposition. 
         A decomposition is entirely defined by the list of slaves. An option shall 
         be included later in which a decomposition can be specified using an adjacency
@@ -1462,8 +1487,7 @@ class Graph:
         A function to optimise all slaves. This function distributes the job of
         optimising every slave to all but one cores on the machine. 
         '''
-        # Extract the list of slaves to be optimised. This contains of all the slaves that
-        #   disagree with at least one other slave on the labelling of at least one node. 
+        # Extract the list of slaves to be optimised. This contains of all the slaves that #   disagree with at least one other slave on the labelling of at least one node. 
         _to_solve   = [self.slave_list[i] for i in self._slaves_to_solve]
         # The number of cores to use is the number of cores on the machine minus 1. 
         # Use only as many cores as needed. 
@@ -1471,7 +1495,7 @@ class Graph:
 
         # Optimise the slaves. 
 # =================== Using Joblib =====================
-#        optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
+        optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
 # ======================================================
 
 # =============== Using multiprocessing ================
@@ -1496,10 +1520,30 @@ class Graph:
 #        del shared_slave_list[:]
 # ======================================================
 
+# ================== Using threading ===================
+#        # Create closure to pass to thread. 
+#        optima = [[] for i in range(self._slaves_to_solve.size)]
+#        def _optimise_slave_th(i, si):
+#            ret = _optimise_slave(self.slave_list[si])
+#            optima[i] = ret
+#
+#        # Create threads. 
+#        threads = []
+#        for i in range(self._slaves_to_solve.size):
+#            t = threading.Thread(target=_optimise_slave_th, args=(i,self._slaves_to_solve[i]))
+#            threads.append(t)
+#
+#        # Launch and synchronise.
+#        for t in threads:
+#            t.start()
+#        for t in threads:
+#            t.join()
+# ======================================================
+
 # ===================== Serially =======================
-        optima = []
-        for s in _to_solve:
-            optima.append(_optimise_slave(s))
+#        optima = []
+#        for s in _to_solve:
+#            optima.append(_optimise_slave(s))
 # ======================================================
 
         # Reflect the result in slave list for our Graph. 
@@ -1608,7 +1652,7 @@ class Graph:
         # How many slaves are to be solved?
         n_slaves_to_solve = self._slaves_to_solve.size
         # A simple heuristic. 
-        if n_slaves_to_solve > 500000:
+        if n_slaves_to_solve > 1e4:
             norm_gt = self._compute_param_updates_parallel(a_start)
         else:
             norm_gt = self._compute_param_updates_sequential(a_start)
