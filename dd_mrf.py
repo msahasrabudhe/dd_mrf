@@ -274,8 +274,8 @@ class Graph:
 
         # Create maps: V x V -> E and E -> V x V. 
         # These give us the edge ID given two end-points, and vice-versa, respectively. 
-        self._edge_id_from_node_ids = np.zeros((self.n_nodes, self.n_nodes), dtype=n_dtype)
-        self._node_ids_from_edge_id = np.zeros((self.n_edges, 2), dtype=n_dtype)
+        self._edge_id_from_node_ids = dict()     # np.zeros((self.n_nodes, self.n_nodes), dtype=n_dtype) # changed to a dictionary.
+        self._node_ids_from_edge_id = dict()     # np.zeros((self.n_edges, 2), dtype=n_dtype) # changed to dictionary. 
 
         # To set the maximum number of labels, we consider what kind of input is n_labels. 
         # If n_labels is an integer, we assume that all nodes should get the same max_n_labels.
@@ -480,7 +480,7 @@ class Graph:
             fp.write('1 %d\n' %(i))
 
         for i in range(self.n_edges):
-            e_ends = self._node_ids_from_edge_id[i,:]
+            e_ends = self._node_ids_from_edge_id[i]
             fp.write('2 %d %d\n' %(e_ends[0], e_ends[1]))
 
         fp.write('\n')
@@ -493,7 +493,7 @@ class Graph:
 
         # Record edges. 
         for i in range(self.n_edges):
-            e_ends = self._node_ids_from_edge_id[i,:]
+            e_ends = self._node_ids_from_edge_id[i]
             fp.write('%d\n' %(self.n_labels[e_ends[0]]*self.n_labels[e_ends[1]]))
             e_array = [str(t) for t in self.edge_energies[i,:,:].flatten().tolist()]
             fp.write(' '.join(e_array) + '\n\n')
@@ -570,9 +570,9 @@ class Graph:
         self.adj_mat[i,j] = self.adj_mat[j,i] = True
 
         # Update maps: V x V -> E and E -> V x V. 
-        self._edge_id_from_node_ids[i,j]       = edge_id
-        self._edge_id_from_node_ids[j,i]       = edge_id
-        self._node_ids_from_edge_id[edge_id,:] = [i,j]
+        self._edge_id_from_node_ids['%d %d' %(i,j)] = edge_id
+        self._edge_id_from_node_ids['%d %d' %(j,i)] = edge_id
+        self._node_ids_from_edge_id[edge_id]        = [i,j]
 
         # Increment the number of edges. 
         self._current_edge_count += 1
@@ -594,8 +594,6 @@ class Graph:
         Graph.create_slaves(): Create slaves for this particular graph.
         The default decomposition is 'mixed'. Allowed values for decomposition are in
         ['mixed', 'tree', 'custom'].
-        If decomposition is 'mixed', try to find as many small cycles as possible in the graph,
-        and then decompose the rest of the graph into trees. 
         If decomposition is 'tree', create a set of trees
         instead by searching for trees in a greedy manner, starting at every node that
         still has edges which are not yet in any tree. Generated trees are not 
@@ -604,6 +602,8 @@ class Graph:
         a decomposition of the graph into spanning trees. The trees are generated
         starting from a random node, and tree generation stops once 
         all edges and nodes are accounted for. 
+        If decomposition is 'mixed', try to find as many small cycles as possible in the graph,
+        and then decompose the rest of the graph into trees. 
         If decomposition is 'custom', the user can specify a custom decomposition. 
         A decomposition is entirely defined by the list of slaves. An option shall 
         be included later in which a decomposition can be specified using an adjacency
@@ -612,6 +612,9 @@ class Graph:
         # TODO: Add functionality to allow the user to set a decomposition by specifying
         #    the adjacency matrix. 
 
+        # A list to record in which slaves each vertex and edge occurs. 
+        self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
+        self.edges_in_slaves = [[] for i in range(self.n_edges)]
         # self._max_nodes_in_slave, and self._max_edges_in_slave are used
         #   to simplify node and edge updates. They shall be computed by the
         #   _create_*_slaves() functions, whichever is called. 
@@ -622,6 +625,11 @@ class Graph:
         def _make_create_tree_slaves(md,sl):
             def h():
                 return self._create_tree_slaves(max_depth=md, slave_list=sl)
+            return h
+        # Create a closure to handle the required inputs for spanning tree slaves
+        def _make_create_spanning_tree_slaves():
+            def h():
+                return self._create_tree_slaves(spanning_trees=True)
             return h
         # Create a closure to handle the required input of max_depth to self._create_mixed_slaves().
         def _make_create_mixed_slaves(md,sl):
@@ -636,10 +644,11 @@ class Graph:
 
         # Functions to call depending on which slave is chosen
         _slave_funcs = {
-            'factor':  self._create_factor_slaves,
-            'tree':    _make_create_tree_slaves(max_depth, slave_list),
-            'mixed':   _make_create_mixed_slaves(max_depth, slave_list),
-            'custom':  _make_create_custom_slaves(slave_list)
+            'factor':         self._create_factor_slaves,
+            'tree':           _make_create_tree_slaves(max_depth, slave_list),
+            'mixed':          _make_create_mixed_slaves(max_depth, slave_list),
+            'spanning_trees': _make_create_spanning_tree_slaves(),
+            'custom':         _make_create_custom_slaves(slave_list)
         }
         
         if decomposition not in _slave_funcs.keys():
@@ -688,13 +697,6 @@ class Graph:
         If the slave corresponds to an edge, its end-points (nodes) shall be shared
         with the corresponding 'node' slaves. 
         '''
-
-        # A list to record in which slaves each vertex and edge occurs. 
-        self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
-        self.edges_in_slaves = [[] for i in range(self.n_edges)]
-        # The maximum number of slaves a node and an edge can appear in. 
-        self._max_nodes_in_slave = 0
-        self._max_edges_in_slave = 0
 
         # The number of slaves
         self.n_slaves   = self.n_nodes + self.n_edges
@@ -773,7 +775,7 @@ class Graph:
         # That's it. 
 
 
-    def _create_tree_slaves(self, max_depth=5, slave_list=None):
+    def _create_tree_slaves(self, max_depth=5, slave_list=None, spanning_trees=False):
         '''
         Graph._create_tree_slaves: Create a list of tree-structured sub-problems. 
         Trees is detected in a greedy manner starting at the first node. 
@@ -781,16 +783,12 @@ class Graph:
         incident on that node that are not already in a tree. 
         '''
         
-        # A list to record in which slaves each vertex and edge occurs. 
-        self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
-        self.edges_in_slaves = [[] for i in range(self.n_edges)]
-        # The maximum number of slaves a node and an edge can appear in. 
-        self._max_nodes_in_slave = 0
-        self._max_edges_in_slave = 0
-
         if slave_list is None:
             # Create adjacency matrices. 
-            subtree_data = self._generate_trees_greedy(max_depth=max_depth)
+            if spanning_trees:
+                subtree_data = self._generate_spanning_trees_greedy()
+            else:
+                subtree_data = self._generate_trees_greedy(max_depth=max_depth)
         else:
             subtree_data = slave_list
 
@@ -844,10 +842,10 @@ class Graph:
             for e in range(gs['n_edges']):
                 e0, e1 = gs['edge_ends'][e,:]
                 try:
-                    assert(self._edge_id_from_node_ids[node_list[e0], node_list[e1]] == edge_list[e])
+                    assert(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])] == edge_list[e])
                 except AssertionError:
                     print 'Conflicting edge IDs in Graph._create_tree_slaves for slave %d.' %(s_id)
-                    print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids[node_list[e0], node_list[e1]], edge_list[e])
+                    print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])], edge_list[e])
                     print 'Node ID in slave are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
                     return
 
@@ -903,7 +901,6 @@ class Graph:
         self.edges_in_slaves = [np.array(t) for t in self.edges_in_slaves]
         # C'est ca.
 
-
     def _create_mixed_slaves(self, max_length=4, slave_list=None):
         '''
         Create mixed slaves. 
@@ -918,13 +915,6 @@ class Graph:
         of the graph. 
         '''
         
-        # A list to record in which slaves each vertex and edge occurs. 
-        self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
-        self.edges_in_slaves = [[] for i in range(self.n_edges)]
-        # The maximum number of slaves a node and an edge can appear in. 
-        self._max_nodes_in_slave = 0
-        self._max_edges_in_slave = 0
-
         # We work with the adjacency matrix of this graph. 
         # Create a copy of the adjacency matrix so that the original is not affected. 
         adj_mat    = np.zeros_like(self.adj_mat)
@@ -1041,7 +1031,7 @@ class Graph:
 
             for i in range(node_list.size):
                 e0, e1       = node_list[i], node_list[(i+1)%n_nodes]
-                e_id         = self._edge_id_from_node_ids[e0, e1]
+                e_id         = self._edge_id_from_node_ids['%d %d' %(e0, e1)]
                 edge_list[i] = e_id
 
             # The number of labels for nodes in this slave. 
@@ -1160,11 +1150,11 @@ class Graph:
             for e in range(gs['n_edges']):
                 e0, e1 = gs['edge_ends'][e,:]
                 try:
-                    assert(self._edge_id_from_node_ids[node_list[e0], node_list[e1]] == edge_list[e])
+                    assert(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])] == edge_list[e])
                 except AssertionError:
                     print 'In slave %d, ' %(s_id)
                     print 'Conflicting edge IDs in Graph._create_tree_slaves.'
-                    print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids[node_list[e0], node_list[e1]], edge_list[e])
+                    print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])], edge_list[e])
                     print 'Node ID in slave are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
                     return
 
@@ -1241,14 +1231,6 @@ class Graph:
 
         # The number of slaves. 
         self.n_slaves = slave_list.size
-
-        # Create empty lists for nodes_in_slaves and edges_in_slaves. 
-        self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
-        self.edges_in_slaves = [[] for i in range(self.n_edges)]
-
-        # Initialise _max_*_in_slave
-        self._max_nodes_in_slave = 0
-        self._max_edges_in_slave = 0
 
         for s_id in range(self.n_slaves):
             # Get node and edge lists. 
@@ -1340,7 +1322,7 @@ class Graph:
     
             # Trim edge energies and the E -> V x V map.
             self.edge_energies          = self.edge_energies[:self._current_edge_count,:,:]
-            self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self._current_edge_count,:]
+#            self._node_ids_from_edge_id = self._node_ids_from_edge_id[:self._current_edge_count,:]
             
             # Reset self.n_edges to _current_edge_count.
             self.n_edges = self._current_edge_count
@@ -1542,7 +1524,7 @@ class Graph:
 
 # ===================== Serially =======================
 #        optima = []
-#        for s in _to_solve:
+#       for s in _to_solve:
 #            optima.append(_optimise_slave(s))
 # ======================================================
 
@@ -1600,7 +1582,7 @@ class Graph:
             if (self.n_nodes + e_id)%(numel/10) == 0:
                 sys.stdout.write('.')
                 sys.stdout.flush()
-            x, y             = self._node_ids_from_edge_id[e_id,:]
+            x, y             = self._node_ids_from_edge_id[e_id]
             n_lbl_x, n_lbl_y = self.n_labels[x], self.n_labels[y]
             _e_energy        = np.zeros((n_lbl_x, n_lbl_y))
             for s_id in self.edges_in_slaves[e_id]:
@@ -1750,7 +1732,7 @@ class Graph:
             n_slaves_eid    = s_ids.size
 
             # Retrieve labellings of this edge, assigned by each slave.
-            x, y          = self._node_ids_from_edge_id[e_id,:]
+            x, y          = self._node_ids_from_edge_id[e_id]
             # n_lables for x and y
             nl_x, nl_y    = self.n_labels[x], self.n_labels[y]
             ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
@@ -1865,7 +1847,7 @@ class Graph:
             n_slaves_eid    = s_ids.size
     
             # Retrieve labellings of this edge, assigned by each slave.
-            x, y          = self._node_ids_from_edge_id[e_id,:]
+            x, y          = self._node_ids_from_edge_id[e_id]
             nl_x, nl_y    = self.n_labels[x], self.n_labels[y]
             ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
             ls_           = np.array([make_one_hot(l_int, nl_x, nl_y) for l_int in ls_int_])
@@ -2021,7 +2003,7 @@ class Graph:
 
         n_cores = cpu_count() - 1
         
-        _inputs  = [[adj_mat, i, max_depth, self._edge_id_from_node_ids] for i in range(n_nodes)]
+        _inputs  = [[adj_mat, i, max_depth] for i in range(n_nodes)]
         _outputs = Parallel(n_jobs=n_cores)(delayed(_generate_tree_with_root)(i) for i in _inputs)
 
         return _outputs
@@ -2049,16 +2031,54 @@ class Graph:
         for i in range(n_nodes):
             if np.sum(adj_mat_copy[i,:]) == 0:
                 continue
-            _res = _generate_tree_with_root([adj_mat_copy, i, max_depth, self._edge_id_from_node_ids])
-            el = _res[2]    
+            _res = _generate_tree_with_root([adj_mat_copy, i, max_depth])
+            el = [self._edge_id_from_node_ids['%d %d' %(e0,e1)] for e0, e1 in _res[2]]
+#            el = _res[2]    
             # Remove already selected edges from adj_mat_copy.
             for e in el:
-                i, j = self._node_ids_from_edge_id[e,:]
+                i, j = self._node_ids_from_edge_id[e]
                 adj_mat_copy[i,j] = adj_mat_copy[j,i] = False
-            subtrees_data += [_res]
+            subtrees_data.append([_res[0], _res[1], el])
 
         return subtrees_data
 
+    def _generate_spanning_trees_greedy(self):
+        '''
+        Generate spanning trees in a greedy manner, so that we generate few trees, 
+        but each of them is a spanning tree, and all of them together cover the entire
+        graph.
+        '''
+        n_nodes = self.n_nodes
+        n_edges = self.n_edges
+
+        marked_edges = np.zeros(n_edges, dtype=np.bool_)
+
+        # Set the max depth to -1. 
+        max_depth = -1
+
+        subtree_data = []
+
+        # Iterate till entire graph is covered. 
+        while np.prod(marked_edges) != 1:
+            unmarked_edges = np.where(marked_edges == False)[0]
+            rand_edge      = unmarked_edges[np.random.randint(unmarked_edges.size)]
+           
+            # Get end points of this edge. 
+            end_pts        = self._node_ids_from_edge_id[rand_edge]
+            # Choose one randomly
+            i              = end_pts[np.random.randint(2)]
+
+            # Find a spanning tree. 
+            print 'Generating spanning tree at node %d.' %(i)
+            _stree    = _generate_tree_with_root([self.adj_mat, i, max_depth])
+            el        = [self._edge_id_from_node_ids['%d %d' %(e0,e1)] for e0, e1 in _stree[2]]
+#            el               = _stree[2]          # Get the edge list. 
+            # Mark edges in el as selected. 
+            marked_edges[el] = True
+
+            subtree_data.append([_stree[0], _stree[1], el])
+
+        return subtree_data
 
     def _check_consistency(self):
         '''
@@ -2099,7 +2119,7 @@ class Graph:
         for i in range(self._check_nodes.size):
             n_id = self._check_nodes[i]
             neighs = np.where(self.adj_mat[n_id,:] == True)[0]
-            e_neighs = [self._edge_id_from_node_ids[n_id, _n] for _n in neighs]
+            e_neighs = [self._edge_id_from_node_ids['%d %d' %(n_id, _n)] for _n in neighs]
             edge_conflicts[e_neighs] = True
 
         # Update self._check_edges to reflect to be only these edges. 
@@ -2177,7 +2197,7 @@ class Graph:
                 # Else, take the argmax decided by the sum of messages from its neighbours that
                 #   have already appeared in node_order. 
                     for _n in neighs:
-                        e_id = self._edge_id_from_node_ids[_n, n_id]
+                        e_id = self._edge_id_from_node_ids['%d %d' %(_n, n_id)]
                         for s_id in self.edges_in_slaves[e_id]:
                             n_edges_in_s = self.slave_list[s_id].graph_struct['n_edges']
                             _e_id = self.slave_list[s_id].edge_map[e_id]
@@ -2236,7 +2256,7 @@ class Graph:
 
         # Compute edge contributions. 
         for e_id in range(self.n_edges):
-            x, y = self._node_ids_from_edge_id[e_id,:]
+            x, y = self._node_ids_from_edge_id[e_id]
             cost += self.edge_energies[e_id, labels[x], labels[y]]
 
         # This is the primal cost corresponding to either the input labels, or the generated ones. 
@@ -2259,7 +2279,7 @@ class Graph:
         e   = np.where(self.edge_flags == False)[0]
 
         # Compute the edge list
-        edge_list   = [self._node_ids_from_edge_id[e_id,:] for e_id in e]
+        edge_list   = [self._node_ids_from_edge_id[e_id] for e_id in e]
 
         # Compute the node_list
         node_list   = n.tolist()
@@ -2721,7 +2741,7 @@ def _generate_tree_with_root(_in):
     adj_mat                = _in[0]
     root                   = _in[1]
     max_depth              = _in[2]
-    _edge_id_from_node_ids = _in[3]
+    #_edge_id_from_node_ids = _in[3]
 
     # Create a queue to traverse the graph in a bredth-first manner
     # Each element of the queue is a pair, where the first of the 
@@ -2788,7 +2808,8 @@ def _generate_tree_with_root(_in):
     tree_adjmat = tree_adjmat + tree_adjmat.T
     # These are the edge ends. 
     edge_ends = np.where(np.tril(tree_adjmat).T == True)
-    edge_list = [_edge_id_from_node_ids[e0,e1] for e0, e1 in zip(edge_ends[0], edge_ends[1])]
+    edge_list = zip(edge_ends[0], edge_ends[1])
+#    edge_list = [_edge_id_from_node_ids['%d %d' %(e0,e1)] for e0, e1 in zip(edge_ends[0], edge_ends[1])]
 
     # Also create a sliced matrix, only from the visited nodes. 
     _sliced = tree_adjmat[node_list,:][:,node_list]
