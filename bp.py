@@ -5,14 +5,13 @@ import time
 
 def max_prod_bp(node_pot, edge_pot, graph_struct):
     # Set random seed
-    _ctime = time.time()
-    np.random.seed(np.floor(np.sin(_ctime)*np.sin(_ctime)*_ctime).astype(np.int))
+#    _ctime = time.time()
+#    np.random.seed(np.floor(np.sin(_ctime)*np.sin(_ctime)*_ctime).astype(np.int))
 
 
     adj_mat         = graph_struct['adj_mat']
     n_nodes         = graph_struct['n_nodes']
     n_edges         = graph_struct['n_edges']
-    edge_ends       = graph_struct['edge_ends']
     node_degrees    = graph_struct['node_degrees']
     e_ids           = graph_struct['e_ids']
     n_states        = graph_struct['n_states']
@@ -78,6 +77,10 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
 
         path = [[_from, _to]] + path
 
+        # Number of states in _from and _to
+        ns_from = n_states[_from]
+        ns_to   = n_states[_to]
+
         # Update node degrees by removing this edge. 
         node_degrees_copy[_from]    -= 1
         node_degrees_copy[_to]  -= 1
@@ -85,11 +88,12 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
         adj_mat_copy[_from, _to] = False
         adj_mat_copy[_to, _from] = False
 
-        # Node ID for this edge. 
-        e_id = e_ids['%d %d' %(_from, _to)]
-
         # This is needed to slice edge_pot properly. 
-        _mfrom, _mto = np.min([_from,_to]), np.max([_from,_to])
+        # _mfrom, _mto = np.min([_from,_to]), np.max([_from,_to])
+        _mfrom = min([_from, _to])
+        _mto   = _from + _to - _mfrom
+        # Node ID for this edge. 
+        e_id = e_ids['%d %d' %(_mfrom, _mto)]
         # edge_pot for this edge. 
         _ep = edge_pot[e_id, 0:n_states[_mfrom], 0:n_states[_mto]]
         # If we are sending a message the other way, it is necessary to flip edge_pot. 
@@ -97,21 +101,21 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
             _ep = _ep.T
 
         # node_pot for this node
-        _np = node_pot[_from, 0:n_states[_from]]
+        _np = node_pot[_from, 0:ns_from]
 
         # Send messages. 
-        _t = _np*messages_in[_from, 0:n_states[_from]]
-        _t = np.tile(np.reshape(_t, [-1, 1]), [1, n_states[_to]])   # Max-product
+        _t = _np*messages_in[_from, 0:ns_from]
+        _t = np.reshape(_t, [-1, 1])       # Max-product
 
         # The message ID, m_id, is the same as e_id if _from < _to, 
         #   else it is e_id + n_edges.
         m_id    = e_id if _from < _to else e_id + n_edges
-        messages[m_id, :n_states[_to]] = np.max(_t*_ep, axis=0)             # Max-product
+        messages[m_id, :ns_to] = np.max(_t*_ep, axis=0)             # Max-product
         sent[m_id] = True
         # Normalise.
-        messages[m_id, :n_states[_to]] /= np.sum(messages[m_id,:n_states[_to]])
+        messages[m_id, :ns_to] /= np.sum(messages[m_id,:ns_to])
 
-        messages_in[_to, :n_states[_to]] *= messages[m_id, :n_states[_to]]
+        messages_in[_to, :ns_to] *= messages[m_id, :ns_to]
 
         # If the degree of the node _to is 0, it is supposed to be the root. 
         # We break from the while loop
@@ -127,11 +131,17 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
     for _e in path:
         # The inverse edge.
         _to, _from = _e
-        # Edge id. 
-        e_id = e_ids['%d %d' %(_to, _from)]
+
+        # The number of states for _from and _to
+        ns_from = n_states[_from]
+        ns_to   = n_states[_to]
 
         # This is needed to slice edge_pot properly. 
-        _mfrom, _mto = np.min([_from,_to]), np.max([_from,_to])
+#        _mfrom, _mto = np.min([_from,_to]), np.max([_from,_to])
+        _mfrom = min([_from, _to])
+        _mto   = _from + _to - _mfrom
+        # Edge id. 
+        e_id = e_ids['%d %d' %(_mfrom, _mto)]
         # Edge potentials for this edge. 
         _ep = edge_pot[e_id, :n_states[_mfrom], :n_states[_mto]]
         # If we are sending a message the other way, it is necessary to flip edge_pot. 
@@ -144,19 +154,19 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
         # Get the product of messages into _from, excluding those from _to, and 
         #    remove this edge, i.e., _to->_from, from the product
         tm_id = e_id if _to < _from else e_id + n_edges
-        mesg_prod = messages_in[_from,:n_states[_from]]/messages[tm_id,:n_states[_from]]
+        mesg_prod = messages_in[_from,:ns_from]/messages[tm_id,:ns_from]
         # Compute and send message. 
-        _t = node_pot[_from, :n_states[_from]]*mesg_prod
-        _t = np.tile(np.reshape(_t, [-1, 1]), [1, n_states[_to]])   # Max-product
+        _t = node_pot[_from, :ns_from]*mesg_prod
+        _t = np.reshape(_t, [-1, 1])       # Max-product
 
         m_id = e_id if _from < _to else e_id + n_edges
-        messages[m_id,:n_states[_to]] = np.max(_t*_ep, axis=0)      
+        messages[m_id,:ns_to] = np.max(_t*_ep, axis=0)      
         sent[m_id] = True
 
         # Normalise.
-        messages[m_id,:n_states[_to]] /= np.sum(messages[m_id,:n_states[_to]])
+        messages[m_id,:ns_to] /= np.sum(messages[m_id,:ns_to])
 
-        messages_in[_to,:n_states[_to]] *= messages[m_id,:n_states[_to]]
+        messages_in[_to,:ns_to] *= messages[m_id,:ns_to]
 
 #   messages_in /= np.tile(np.sum(messages_in, axis=1, keepdims=True), [1, max_state])
 
@@ -208,9 +218,9 @@ def make_graph_struct(adj_mat, n_states):
     # e_ids = e_ids + e_ids.T
 
     if type(n_states) is int:
-        n_states = n_states*np.ones(n_nodes, dtype=np.int)
+        n_states = n_states + np.zeros(n_nodes, dtype=np.int16)
     else:
-        n_states = np.array(n_states, dtype=np.int)
+        n_states = np.array(n_states, dtype=np.int16)
 
     graph_struct                = {}
     graph_struct['n_nodes']     = n_nodes

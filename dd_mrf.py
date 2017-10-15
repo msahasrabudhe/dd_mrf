@@ -1471,13 +1471,14 @@ class Graph:
         '''
         # Extract the list of slaves to be optimised. This contains of all the slaves that #   disagree with at least one other slave on the labelling of at least one node. 
         _to_solve   = [self.slave_list[i] for i in self._slaves_to_solve]
-        # The number of cores to use is the number of cores on the machine minus 1. 
-        # Use only as many cores as needed. 
-        n_cores     = np.min([cpu_count() - 1, self._slaves_to_solve.size])
 
         # Optimise the slaves. 
 # =================== Using Joblib =====================
-        optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
+        if self._slaves_to_solve.size > 0:
+            # The number of cores to use is the number of cores on the machine minus 1. 
+            # Use only as many cores as needed. 
+            n_cores     = min([cpu_count() - 1, self._slaves_to_solve.size])
+            optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
 # ======================================================
 
 # =============== Using multiprocessing ================
@@ -1523,9 +1524,10 @@ class Graph:
 # ======================================================
 
 # ===================== Serially =======================
-#        optima = []
-#       for s in _to_solve:
-#            optima.append(_optimise_slave(s))
+        else:
+            optima = []
+            for s in _to_solve:
+                optima.append(_optimise_slave(s))
 # ======================================================
 
         # Reflect the result in slave list for our Graph. 
@@ -2053,6 +2055,13 @@ class Graph:
 
         marked_edges = np.zeros(n_edges, dtype=np.bool_)
 
+        # Make copy of adjacency matrix. 
+        adj_mat_copy      = np.zeros_like(self.adj_mat)
+        adj_mat_copy[:,:] = self.adj_mat[:,:]
+
+        # Get node degrees. 
+        node_degrees = np.sum(self.adj_mat, axis=1)
+
         # Set the max depth to -1. 
         max_depth = -1
 
@@ -2060,21 +2069,33 @@ class Graph:
 
         # Iterate till entire graph is covered. 
         while np.prod(marked_edges) != 1:
-            unmarked_edges = np.where(marked_edges == False)[0]
-            rand_edge      = unmarked_edges[np.random.randint(unmarked_edges.size)]
-           
-            # Get end points of this edge. 
-            end_pts        = self._node_ids_from_edge_id[rand_edge]
-            # Choose one randomly
-            i              = end_pts[np.random.randint(2)]
+#            if np.prod(marked_nodes) == 1:
+#                unmarked_edges = np.where(marked_edges == False)[0]
+#                rand_edge      = unmarked_edges[np.random.randint(unmarked_edges.size)]
+#           
+#                # Get end points of this edge. 
+#                end_pts        = self._node_ids_from_edge_id[rand_edge]
+#                # Choose one randomly
+#                i              = end_pts[np.random.randint(2)]
+#            else:
+                # Choose the next vertex as the node with the maximum degree. 
+            max_degree     = np.max(node_degrees)
+            _nodes_max_deg = np.where(node_degrees == max_degree)[0]
+            i              = _nodes_max_deg[np.random.randint(_nodes_max_deg.size)]
 
             # Find a spanning tree. 
-            print 'Generating spanning tree at node %d.' %(i)
+            print 'Generating spanning tree at node %d with degree %d.' %(i, node_degrees[i])
             _stree    = _generate_tree_with_root([self.adj_mat, i, max_depth])
             el        = [self._edge_id_from_node_ids['%d %d' %(e0,e1)] for e0, e1 in _stree[2]]
 #            el               = _stree[2]          # Get the edge list. 
             # Mark edges in el as selected. 
             marked_edges[el] = True
+            # Mark edges in adjacency matrix and recalculate node degrees. 
+            for e0, e1 in _stree[2]:
+                adj_mat_copy[e0, e1] = False
+                adj_mat_copy[e1, e0] = False
+            # Recalculate node degrees.
+            node_degrees             = np.sum(adj_mat_copy, axis=1)
 
             subtree_data.append([_stree[0], _stree[1], el])
 
@@ -2967,7 +2988,7 @@ def dfs_unique_cycles(adj_mat, max_length=-1):
 
     # Parallel processing: find longest cycle for every node independently
     #    as these operations do not interact with each other, for different nodes. 
-    n_cores = np.min([n_nodes, cpu_count() - 1])
+    n_cores = min([n_nodes, cpu_count() - 1])
 
     # Create inputs: 
     adj_mat_int = adj_mat.astype(np.int)        # Can't skip np.int here! The C program requires np.int
