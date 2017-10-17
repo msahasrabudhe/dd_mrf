@@ -11,10 +11,12 @@ from joblib import Parallel, delayed, cpu_count
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import sys
-import threading
 
 # To create shared numpy arrays using multiprocessing.
-import ctypes
+# import ctypes
+
+# Use threading for parallel processing.
+# import threading
 
 # Max product belief propagation on trees. 
 import bp           
@@ -44,17 +46,13 @@ slave_types         = ['free_node', 'free_edge', 'cell', 'tree', 'cycle']
 # List of allowed graph decompositions.
 decomposition_types = ['tree', 'spanning_trees', 'mixed', 'custom', 'factor']
 
-# Infinity energy. Deliberately introduced to skew primal and dual costs,
-#    so that it is easier to debug when optimisation is buggy. 
-inf_energy = 1e1000
-
 # Create a multiprocessing.Manager() object for shared lists. 
 # This shared list shall be used to record the slaves to be solved. 
 #    and shall be used in the function _optimise_slave_mp()
 #    to solve slaves in parallel. 
-manager           = multiprocessing.Manager()
+# manager           = multiprocessing.Manager()
 # Create a shared list which can be used to access the slave list across processes. 
-shared_slave_list = manager.list()
+# shared_slave_list = manager.list()
 
 class Slave:
     '''
@@ -1261,7 +1259,7 @@ class Graph:
 
 
     def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', max_depth=2, \
-            _momentum=0.0, slave_list=None, _verbose=True, _resume=False, _create_slaves=True):
+            _momentum=1.0, slave_list=None, _verbose=True, _resume=False, _create_slaves=True):
         '''
         Graph.optimise(): Optimise the set energies over the graph and return a labelling. 
 
@@ -1309,8 +1307,8 @@ class Graph:
                 raise ValueError
     
             # Momentum must be in [0, 1)
-            if _momentum < 0 or _momentum >= 1:
-                print 'Momentum must be in [0, 1).'
+            if _momentum <= 0 or _momentum > 1:
+                print 'Momentum must be in (0, 1].'
                 raise ValueError
     
             # First check if the graph is complete. 
@@ -1636,7 +1634,7 @@ class Graph:
         # How many slaves are to be solved?
         n_slaves_to_solve = self._slaves_to_solve.size
         # A simple heuristic. 
-        if n_slaves_to_solve > 1e4:
+        if n_slaves_to_solve > 1e10:
             norm_gt = self._compute_param_updates_parallel(a_start)
         else:
             norm_gt = self._compute_param_updates_sequential(a_start)
@@ -1646,11 +1644,6 @@ class Graph:
 
         # Record the norm of the subgradient. 
         self.subgradient_norms += [norm_gt]
-
-        # Add momentum.
-        if self.it > 1:
-            self._slave_node_up = (1.0 - self._momentum)*self._slave_node_up + self._momentum*self._prv_node_sg
-            self._slave_edge_up = (1.0 - self._momentum)*self._slave_edge_up + self._momentum*self._prv_edge_sg
 
         # Compute the alpha for this step. 
         if self._optim_strategy == 'step':
@@ -1668,6 +1661,15 @@ class Graph:
                 alpha   = alpha*1.0/np.sqrt(self.it)
         # Set alpha. 
         self.alpha = alpha
+
+        # Add momentum.
+        if self.it > 1:
+            if 'step' in self._optim_strategy:
+                rho_t = self._momentum*(self.alpha/a_start)
+            else:
+                rho_t = self._momentum
+            self._slave_node_up = rho_t*self._slave_node_up + (1.0 - rho_t)*self._prv_node_sg
+            self._slave_edge_up = rho_t*self._slave_edge_up + (1.0 - rho_t)*self._prv_edge_sg
 
 
     def _compute_param_updates_parallel(self, a_start):
@@ -2184,7 +2186,7 @@ class Graph:
         labels = np.zeros(self.n_nodes, dtype=l_dtype)
 
         # Iterate over every node. 
-        if self.decomposition == 'tree' and self._primal_strat == 'bp':
+        if 'tree' in self.decomposition and self._primal_strat == 'bp':
 #       if self._primal_strat:          # Adding a method to estimate primals based on ergodic sequences. Commented previous if. 
             # Use Max product messages to compute the best solution. 
         
