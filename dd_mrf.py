@@ -1258,8 +1258,8 @@ class Graph:
 
 
 
-    def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', max_depth=2, \
-            _momentum=1.0, slave_list=None, _verbose=True, _resume=False, _create_slaves=True):
+    def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', algorithm='subgradient', 
+            max_depth=2, _momentum=1.0, slave_list=None, _verbose=True, _resume=False, _create_slaves=True):
         '''
         Graph.optimise(): Optimise the set energies over the graph and return a labelling. 
 
@@ -1281,6 +1281,10 @@ class Graph:
               \\alpha_t = a_start*\\frac{Approx_t - Dual_t}{norm(\\nabla g_t)**2},
 
         where \\nabla g_t is the subgradient of the dual at iteration t. 
+
+        algorithm is a parameter used to decide whether to use the subgradient algorithm 
+        or the block-coordinate descent algorithm. algorithm must be one of 'subgradient'
+        or 'block_coordinate'.
         '''
 
         # If resume, resume previous optimisation. 
@@ -1289,6 +1293,11 @@ class Graph:
             if decomposition not in decomposition_types:
                 print 'Permissible values for decomposition are \'tree\', and \'custom\' .'
                 print 'Custom decomposition must be specified in the form of a list of slaves if \'custom\' is chosen.'
+                raise ValueError
+
+            # Check if a permissible algorithm is used. 
+            if algorithm not in ['subgradient', 'block_coordinate']:
+                print 'Permissible values for algorithm are \'subgradient\' and \'block_coordinate\'.'
                 raise ValueError
     
             # Check if a permissible strategy is being used. 
@@ -1426,7 +1435,11 @@ class Graph:
             self.dual_costs += [dual_cost]
 
             # Compute parameter updates after this round of optimisation. But don't apply them yet!
-            self._compute_param_updates(a_start)
+            if algorithm is 'subgradient':
+                self._compute_param_updates_SG(a_start)
+            else:  
+                self._compute_param_updates_BC(a_start)
+
 
             # Verify whether the algorithm has converged. If all slaves agree
             #    on the labelling of every node, we have convergence. 
@@ -1598,12 +1611,13 @@ class Graph:
 
         return flag
 
-    def _compute_param_updates(self, a_start):
+
+    def _compute_param_updates_SG(self, a_start):
         '''
         Compute parameter updates for slaves. 
         Updates are computed after every iteration. 
-        This function calls _compute_param_updates_parallel, or 
-        _compute_param_updates_sequential, based on the number
+        This function calls _compute_param_updates_SG_parallel, or 
+        _compute_param_updates_SG_sequential, based on the number
         of slaves to be solved. In case they are few in number, 
         the overhead of starting multiple threads to compute
         updates to all of them dominates the execution time, and
@@ -1635,9 +1649,9 @@ class Graph:
         n_slaves_to_solve = self._slaves_to_solve.size
         # A simple heuristic. 
         if n_slaves_to_solve > 1e10:
-            norm_gt = self._compute_param_updates_parallel(a_start)
+            norm_gt = self._compute_param_updates_SG_parallel(a_start)
         else:
-            norm_gt = self._compute_param_updates_sequential(a_start)
+            norm_gt = self._compute_param_updates_SG_sequential(a_start)
             
         # Reset the slaves to solve. 
         self._slaves_to_solve = np.where(np.sum(self._mark_sl_up, axis=0)!=0)[0].astype(n_dtype)
@@ -1672,7 +1686,7 @@ class Graph:
             self._slave_edge_up = rho_t*self._slave_edge_up + (1.0 - rho_t)*self._prv_edge_sg
 
 
-    def _compute_param_updates_parallel(self, a_start):
+    def _compute_param_updates_SG_parallel(self, a_start):
         ''' 
         Compute parameter updates for slaves, in a parallel manner. 
         '''
@@ -1793,7 +1807,7 @@ class Graph:
         # Return the norm of the subgradient. 
         return norm_gt
     
-    def _compute_param_updates_sequential(self, a_start):
+    def _compute_param_updates_SG_sequential(self, a_start):
         '''
         Compute parameter updates for slaves, in a sequential manner. 
         '''
