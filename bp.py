@@ -42,20 +42,11 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
     # Find leaf nodes. 
     queue = np.where(node_degrees_copy == 1)[0].tolist()
 
-    # Record if node is already visited. 
-    visited = np.zeros(n_nodes, dtype=np.bool)
-    # Record if node is in queue. 
-    in_queue = np.zeros(n_nodes, dtype=np.bool)
-
-    # Place initial nodes in queue. 
-    in_queue[queue] = True
-
     # Messages to be received. Each element i stores the message received
     #   by node i. 
     messages = np.zeros((n_edges*2, max_state))
     # Stores the product of in-coming messages into a node. 
     messages_in = np.ones((n_nodes, max_state))
-    sent = np.zeros(n_edges*2, dtype=np.bool)
 
     # Store the path we took for these messages
     path = []
@@ -65,8 +56,6 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
         _from   = queue[0]
         queue   = queue[1:]
 
-        # Mark this as visited. 
-        visited[_from] = True
         # The node to send message to
         _find_next = np.where(adj_mat_copy[_from,:] == True)[0]
         # If there are no next nodes, we have reached the root. 
@@ -111,7 +100,6 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
         #   else it is e_id + n_edges.
         m_id    = e_id if _from < _to else e_id + n_edges
         messages[m_id, :ns_to] = np.max(_t*_ep, axis=0)             # Max-product
-        sent[m_id] = True
         # Normalise.
         messages[m_id, :ns_to] /= np.sum(messages[m_id,:ns_to])
 
@@ -148,8 +136,8 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
         if _from > _to:
             _ep = _ep.T
 
-        neighs = np.setdiff1d(np.where(adj_mat[_from,:] == True)[0], [_to])
-        n_mids = [e_ids['%d %d' %(_from,n)] if n < _from else e_ids['%d %d' %(_from,n)] + n_edges for n in neighs]
+#        neighs = np.setdiff1d(np.where(adj_mat[_from,:] == True)[0], [_to])
+#        n_mids = [e_ids['%d %d' %(_from,n)] if n < _from else e_ids['%d %d' %(_from,n)] + n_edges for n in neighs]
 
         # Get the product of messages into _from, excluding those from _to, and 
         #    remove this edge, i.e., _to->_from, from the product
@@ -161,7 +149,6 @@ def max_prod_bp(node_pot, edge_pot, graph_struct):
 
         m_id = e_id if _from < _to else e_id + n_edges
         messages[m_id,:ns_to] = np.max(_t*_ep, axis=0)      
-        sent[m_id] = True
 
         # Normalise.
         messages[m_id,:ns_to] /= np.sum(messages[m_id,:ns_to])
