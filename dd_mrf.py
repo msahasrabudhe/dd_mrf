@@ -36,27 +36,27 @@ l_dtype = np.int16
 n_dtype = np.int32
 # The dtype used when booleans are needed as ints. Should use only 1 byte.
 m_dtype = np.int8
-# The dtype used for updates to slave energies. These updates are usually small.
+# The dtype used for updates to subordinate energies. These updates are usually small.
 # --- Using float64 here anyway, because ctypes.c_float apparently results in 64 bit
 #     floats, when it should actually result in 32 bit ones.
 u_dtype = np.float64
 
-# List of slave types handled by this module. 
-slave_types         = ['free_node', 'free_edge', 'cell', 'tree', 'cycle']
+# List of subordinate types handled by this module. 
+subordinate_types         = ['free_node', 'free_edge', 'cell', 'tree', 'cycle']
 # List of allowed graph decompositions.
 decomposition_types = ['tree', 'spanning_trees', 'mixed', 'custom', 'factor']
 
 # Create a multiprocessing.Manager() object for shared lists. 
-# This shared list shall be used to record the slaves to be solved. 
-#    and shall be used in the function _optimise_slave_mp()
-#    to solve slaves in parallel. 
+# This shared list shall be used to record the subordinates to be solved. 
+#    and shall be used in the function _optimise_subordinate_mp()
+#    to solve subordinates in parallel. 
 # manager           = multiprocessing.Manager()
-# Create a shared list which can be used to access the slave list across processes. 
-# shared_slave_list = manager.list()
+# Create a shared list which can be used to access the subordinate list across processes. 
+# shared_subordinate_list = manager.list()
 
-class Slave:
+class Subordinate:
     '''
-    A class to store a slave. An instance of this class stores
+    A class to store a subordinate. An instance of this class stores
     the list of nodes it contains, the list of edges it contains, 
     the energies corresponding to all of them, and the structure
     of the graph. 
@@ -64,11 +64,11 @@ class Slave:
     def __init__(self, node_list=None, edge_list=None, 
             node_energies=None, n_labels=None, edge_energies=None, graph_struct=None, struct='cell'):
         '''
-        Slave.__init__(): Initialise parameters for this slave, if given. 
+        Subordinate.__init__(): Initialise parameters for this subordinate, if given. 
                           Parameters are None by default. 
         '''
-        if struct not in slave_types:
-            print 'Slave struct not recognised: %s.' %(struct)
+        if struct not in subordinate_types:
+            print 'Subordinate struct not recognised: %s.' %(struct)
             raise ValueError
 
         self.node_list      = node_list
@@ -82,11 +82,11 @@ class Slave:
     def set_params(self, node_list, edge_list, 
             node_energies, n_labels, edge_energies, graph_struct, struct):
         '''
-        Slave.set_params(): Set parameters for this slave.
+        Subordinate.set_params(): Set parameters for this subordinate.
                             Parameters must be specified.
         '''
-        if struct not in slave_types:
-            print 'Slave struct not recognised: %s.' %(struct)
+        if struct not in subordinate_types:
+            print 'Subordinate struct not recognised: %s.' %(struct)
             raise ValueError
 
         self.node_list      = node_list
@@ -105,8 +105,8 @@ class Slave:
 #       self.all_labellings = _generate_label_permutations(self.n_labels)
 
         # The max label any node can have. 
-        # TODO: Handle this so that sliced matrices are created in Graph._create_..._slaves()
-        #    and passed to Slave.set_params. Otherwise, the reshape operation in 
+        # TODO: Handle this so that sliced matrices are created in Graph._create_..._subordinates()
+        #    and passed to Subordinate.set_params. Otherwise, the reshape operation in 
         #    _optimise_cycle() will not work. 
         self.max_n_labels   = np.max(n_labels)
 
@@ -122,13 +122,13 @@ class Slave:
 
     def get_params(self):
         '''
-        Slave.get_params(): Return parameters of this slave
+        Subordinate.get_params(): Return parameters of this subordinate
         '''
         return self.struct, self.node_list, self.edge_list, self.node_energies, self.n_labels, self.edge_energies
 
     def set_labels(self, labels):
         '''
-        Slave.set_labels(): Set the labelling for a slave
+        Subordinate.set_labels(): Set the labelling for a subordinate
         '''
         self.labels = np.array(labels, dtype=l_dtype)
 
@@ -145,17 +145,17 @@ class Slave:
         '''
         if n_id not in self.node_list:
             print self.node_list,
-            print 'Node %d is not in this slave.' %(n_id)
+            print 'Node %d is not in this subordinate.' %(n_id)
             raise ValueError
         return self.label_from_node[n_id]
 
 
     def optimise(self):
         '''
-        Optimise this slave. 
+        Optimise this subordinate. 
         '''
         if self.struct == 'cell':
-            _l, _e =  _optimise_4node_slave(self)
+            _l, _e =  _optimise_4node_subordinate(self)
             self.labels  = _l
             self._energy = _e
             return _l, _e
@@ -202,20 +202,20 @@ class Slave:
             return min_labels, min_energy
                 
         else:
-            print 'Slave struct not recognised: %s.' %(self.struct)
+            print 'Subordinate struct not recognised: %s.' %(self.struct)
             raise ValueError
 
     def _compute_energy(self):
         '''
-        Slave._compute_energy(): Computes the energy of this slave. Assumes that
-                                 we have already assigned labels to this slave. 
+        Subordinate._compute_energy(): Computes the energy of this subordinate. Assumes that
+                                 we have already assigned labels to this subordinate. 
         '''
         if self.struct == 'cell':
-            self._energy    = _compute_4node_slave_energy(self.node_energies, self.edge_energies, self.labels)
+            self._energy    = _compute_4node_subordinate_energy(self.node_energies, self.edge_energies, self.labels)
         elif self.struct == 'tree':
-            self._energy    = _compute_tree_slave_energy(self.node_energies, self.edge_energies, self.labels, self.graph_struct)
+            self._energy    = _compute_tree_subordinate_energy(self.node_energies, self.edge_energies, self.labels, self.graph_struct)
         elif self.struct == 'cycle':
-            self._energy    = _compute_cycle_slave_energy(self.node_energies, self.edge_energies, self.labels, self.node_list)
+            self._energy    = _compute_cycle_subordinate_energy(self.node_energies, self.edge_energies, self.labels, self.node_list)
         elif self.struct == 'free_node':
             self._energy    = self.node_energies[0, self.labels[0]]
         elif self.struct == 'free_edge':
@@ -223,7 +223,7 @@ class Slave:
                               self.node_energies[1,self.labels[1]] + \
                               self.edge_energies[0, self.labels[0], self.labels[1]]
         else:
-            print 'Slave struct not recognised: %s.' %(self.struct)
+            print 'Subordinate struct not recognised: %s.' %(self.struct)
             raise ValueError
         return self._energy
 
@@ -236,7 +236,7 @@ class Graph:
     A Graph object can be created by specifying the number of nodes and the number of labels. 
     Node energies and edge energies can be added later. Only after the addition of 
     node and edge energies, can the user proceed to its optimisation. The optimisation
-    is done by first breaking the graph into slaves (sub-graphs), and then iteratively solving
+    is done by first breaking the graph into subordinates (sub-graphs), and then iteratively solving
     them according to the DD-MRF algorithm. 
     '''
 
@@ -300,7 +300,7 @@ class Graph:
         self._max_pot       = None
 
         # Which strategy to use to generate primal solutions. 
-        self._primal_strat  = 'vote'            # Use slaves to vote on nodes. 
+        self._primal_strat  = 'vote'            # Use subordinates to vote on nodes. 
 
 
     def _init_from_uai(self, uai_file, _maximise):
@@ -587,9 +587,9 @@ class Graph:
         return True
 
     
-    def create_slaves(self, decomposition='mixed', max_depth=5, slave_list=None):
+    def create_subordinates(self, decomposition='mixed', max_depth=5, subordinate_list=None):
         '''
-        Graph.create_slaves(): Create slaves for this particular graph.
+        Graph.create_subordinates(): Create subordinates for this particular graph.
         The default decomposition is 'mixed'. Allowed values for decomposition are in
         ['mixed', 'tree', 'custom'].
         If decomposition is 'tree', create a set of trees
@@ -603,108 +603,108 @@ class Graph:
         If decomposition is 'mixed', try to find as many small cycles as possible in the graph,
         and then decompose the rest of the graph into trees. 
         If decomposition is 'custom', the user can specify a custom decomposition. 
-        A decomposition is entirely defined by the list of slaves. An option shall 
+        A decomposition is entirely defined by the list of subordinates. An option shall 
         be included later in which a decomposition can be specified using an adjacency
         matrix (which shall be easier for the user).
         '''
         # TODO: Add functionality to allow the user to set a decomposition by specifying
         #    the adjacency matrix. 
 
-        # A list to record in which slaves each vertex and edge occurs. 
-        self.nodes_in_slaves = [[] for i in range(self.n_nodes)]
-        self.edges_in_slaves = [[] for i in range(self.n_edges)]
-        # self._max_nodes_in_slave, and self._max_edges_in_slave are used
+        # A list to record in which subordinates each vertex and edge occurs. 
+        self.nodes_in_subordinates = [[] for i in range(self.n_nodes)]
+        self.edges_in_subordinates = [[] for i in range(self.n_edges)]
+        # self._max_nodes_in_subordinate, and self._max_edges_in_subordinate are used
         #   to simplify node and edge updates. They shall be computed by the
-        #   _create_*_slaves() functions, whichever is called. 
-        self._max_nodes_in_slave = 0 
-        self._max_edges_in_slave = 0
+        #   _create_*_subordinates() functions, whichever is called. 
+        self._max_nodes_in_subordinate = 0 
+        self._max_edges_in_subordinate = 0
 
-        # Create a closure to handle the required input of max_depth to self._create_tree_slaves(). 
-        def _make_create_tree_slaves(md,sl):
+        # Create a closure to handle the required input of max_depth to self._create_tree_subordinates(). 
+        def _make_create_tree_subordinates(md,sl):
             def h():
-                return self._create_tree_slaves(max_depth=md, slave_list=sl)
+                return self._create_tree_subordinates(max_depth=md, subordinate_list=sl)
             return h
-        # Create a closure to handle the required inputs for spanning tree slaves
-        def _make_create_spanning_tree_slaves():
+        # Create a closure to handle the required inputs for spanning tree subordinates
+        def _make_create_spanning_tree_subordinates():
             def h():
-                return self._create_tree_slaves(spanning_trees=True)
+                return self._create_tree_subordinates(spanning_trees=True)
             return h
-        # Create a closure to handle the required input of max_depth to self._create_mixed_slaves().
-        def _make_create_mixed_slaves(md,sl):
+        # Create a closure to handle the required input of max_depth to self._create_mixed_subordinates().
+        def _make_create_mixed_subordinates(md,sl):
             def h():
-                return self._create_mixed_slaves(max_length=md, slave_list=sl)
+                return self._create_mixed_subordinates(max_length=md, subordinate_list=sl)
             return h
-        # Create a closure to handle the required input of slave_list to self._create_custom_slaves().
-        def _make_create_custom_slaves(sl):
+        # Create a closure to handle the required input of subordinate_list to self._create_custom_subordinates().
+        def _make_create_custom_subordinates(sl):
             def h():
-                return self._create_custom_slaves(sl)
+                return self._create_custom_subordinates(sl)
             return h
 
-        # Functions to call depending on which slave is chosen
-        _slave_funcs = {
-            'factor':         self._create_factor_slaves,
-            'tree':           _make_create_tree_slaves(max_depth, slave_list),
-            'mixed':          _make_create_mixed_slaves(max_depth, slave_list),
-            'spanning_trees': _make_create_spanning_tree_slaves(),
-            'custom':         _make_create_custom_slaves(slave_list)
+        # Functions to call depending on which subordinate is chosen
+        _subordinate_funcs = {
+            'factor':         self._create_factor_subordinates,
+            'tree':           _make_create_tree_subordinates(max_depth, subordinate_list),
+            'mixed':          _make_create_mixed_subordinates(max_depth, subordinate_list),
+            'spanning_trees': _make_create_spanning_tree_subordinates(),
+            'custom':         _make_create_custom_subordinates(subordinate_list)
         }
         
-        if decomposition not in _slave_funcs.keys():
-            print 'decomposition must be one of', _slave_funcs.keys()
+        if decomposition not in _subordinate_funcs.keys():
+            print 'decomposition must be one of', _subordinate_funcs.keys()
             raise ValueError
 
-        # Create slaves depending on what decomposition is requested.
-        _slave_funcs[decomposition]()
+        # Create subordinates depending on what decomposition is requested.
+        _subordinate_funcs[decomposition]()
 
-        # Two variables to hold how many slaves each node and edge is contained in (instead
+        # Two variables to hold how many subordinates each node and edge is contained in (instead
         #   of computing the size of the corresponding vector each time. 
-        self._n_slaves_nodes = np.array([self.nodes_in_slaves[n].size for n in range(self.n_nodes)], dtype=n_dtype)
-        self._n_slaves_edges = np.array([self.edges_in_slaves[e].size for e in range(self.n_edges)], dtype=n_dtype)
-        # Initially, we need only check those nodes and edges which associate with at least two slaves. 
-        self._check_nodes    = np.where(self._n_slaves_nodes > 1)[0]
-        self._check_edges    = np.where(self._n_slaves_edges > 1)[0]
+        self._n_subordinates_nodes = np.array([self.nodes_in_subordinates[n].size for n in range(self.n_nodes)], dtype=n_dtype)
+        self._n_subordinates_edges = np.array([self.edges_in_subordinates[e].size for e in range(self.n_edges)], dtype=n_dtype)
+        # Initially, we need only check those nodes and edges which associate with at least two subordinates. 
+        self._check_nodes    = np.where(self._n_subordinates_nodes > 1)[0]
+        self._check_edges    = np.where(self._n_subordinates_edges > 1)[0]
 
         if decomposition != 'custom':
             # Finally, we must modify the energies for every edge or node depending on 
-            #   how many slaves it is a part of. The energy for a node/edge is distributed
-            #   equally among all slaves. 
-            for n_id in np.where(self._n_slaves_nodes > 1)[0]:
-                # Retrieve all the slaves this node is part of.
-                s_ids   = self.nodes_in_slaves[n_id]
-                # Distribute this node's energy equally between all slaves.
+            #   how many subordinates it is a part of. The energy for a node/edge is distributed
+            #   equally among all subordinates. 
+            for n_id in np.where(self._n_subordinates_nodes > 1)[0]:
+                # Retrieve all the subordinates this node is part of.
+                s_ids   = self.nodes_in_subordinates[n_id]
+                # Distribute this node's energy equally between all subordinates.
                 for s in s_ids:
-                    n_id_in_slave   = self.slave_list[s].node_map[n_id]
-                    self.slave_list[s].node_energies[n_id_in_slave, :] /= 1.0*s_ids.size
+                    n_id_in_subordinate   = self.subordinate_list[s].node_map[n_id]
+                    self.subordinate_list[s].node_energies[n_id_in_subordinate, :] /= 1.0*s_ids.size
 
             # Doing the same for edges ...
-            for e_id in np.where(self._n_slaves_edges > 1)[0]:
-                # Retrieve all slaves this edge is part of.
-                s_ids   = self.edges_in_slaves[e_id]
-                # Distribute this edge's energy equally between all slaves. 
+            for e_id in np.where(self._n_subordinates_edges > 1)[0]:
+                # Retrieve all subordinates this edge is part of.
+                s_ids   = self.edges_in_subordinates[e_id]
+                # Distribute this edge's energy equally between all subordinates. 
                 for s in s_ids:
-                    e_id_in_slave   = self.slave_list[s].edge_map[e_id]
-                    self.slave_list[s].edge_energies[e_id_in_slave, :] /= 1.0*s_ids.size
+                    e_id_in_subordinate   = self.subordinate_list[s].edge_map[e_id]
+                    self.subordinate_list[s].edge_energies[e_id_in_subordinate, :] /= 1.0*s_ids.size
 
-        # That is it. The slaves are ready. 
+        # That is it. The subordinates are ready. 
 
-    def _create_factor_slaves(self):
+    def _create_factor_subordinates(self):
         '''
-        Graph._create_factor_slaves: Create a list of slaves in which each
-        slave corresponds to a factor in the graph, i.e., either a node or
+        Graph._create_factor_subordinates: Create a list of subordinates in which each
+        subordinate corresponds to a factor in the graph, i.e., either a node or
         an edge. 
-        If the slave corresponds to an edge, its end-points (nodes) shall be shared
-        with the corresponding 'node' slaves. 
+        If the subordinate corresponds to an edge, its end-points (nodes) shall be shared
+        with the corresponding 'node' subordinates. 
         '''
 
-        # The number of slaves
-        self.n_slaves   = self.n_nodes + self.n_edges
+        # The number of subordinates
+        self.n_subordinates   = self.n_nodes + self.n_edges
 
-        # The slave list. 
-        self.slave_list = np.array([Slave() for i in range(self.n_slaves)])
+        # The subordinate list. 
+        self.subordinate_list = np.array([Subordinate() for i in range(self.n_subordinates)])
 
-        # Create node slaves first. 
+        # Create node subordinates first. 
         for s_id in range(self.n_nodes):
-            # The node this slave corresponds to. 
+            # The node this subordinate corresponds to. 
             n_id = s_id
 
             # The node list
@@ -722,15 +722,15 @@ class Graph:
             # There are no edge energies. 
             edge_energies    = np.array([])
 
-            # Assign parameters to this slave. 
-            self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+            # Assign parameters to this subordinate. 
+            self.subordinate_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
                     edge_energies, None, 'free_node')
 
-            # Add this slave to the lists of nodes and edges in node_list and edge_list
-            self.nodes_in_slaves[n_id] += [s_id]
+            # Add this subordinate to the lists of nodes and edges in node_list and edge_list
+            self.nodes_in_subordinates[n_id] += [s_id]
 
         # Add edges now. 
-        for s_id in range(self.n_nodes, self.n_slaves):
+        for s_id in range(self.n_nodes, self.n_subordinates):
             # Get the edge ID. 
             e_id = s_id - self.n_nodes
 
@@ -753,57 +753,57 @@ class Graph:
             edge_energies    = np.zeros((2, n_labels[0], n_labels[1]), dtype=e_dtype)
             edge_energies[:] = self.edge_energies[e_id, :n_labels[0], :n_labels[1]]
 
-            # Assign these parameters to this slave. 
-            self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+            # Assign these parameters to this subordinate. 
+            self.subordinate_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
                     edge_energies, None, 'free_edge')
 
-            # Add this slave to the list of nodes and edges in node_list and edge_list
-            self.nodes_in_slaves[i_id] += [s_id]
-            self.nodes_in_slaves[j_id] += [s_id]
-            self.edges_in_slaves[e_id] += [s_id]
+            # Add this subordinate to the list of nodes and edges in node_list and edge_list
+            self.nodes_in_subordinates[i_id] += [s_id]
+            self.nodes_in_subordinates[j_id] += [s_id]
+            self.edges_in_subordinates[e_id] += [s_id]
 
-        # For convenience, make elements of self.nodes_in_slaves, and self.edges_in_slaves into
+        # For convenience, make elements of self.nodes_in_subordinates, and self.edges_in_subordinates into
         # Numpy arrays. 
-        self.nodes_in_slaves = [np.array(t) for t in self.nodes_in_slaves]
-        self.edges_in_slaves = [np.array(t) for t in self.edges_in_slaves]
+        self.nodes_in_subordinates = [np.array(t) for t in self.nodes_in_subordinates]
+        self.edges_in_subordinates = [np.array(t) for t in self.edges_in_subordinates]
 
-        # Set self._max_nodes_in_slaves and self._max_edges_in_slaves. We can hard-code these values. 
-        self._max_nodes_in_slave = 2
-        self._max_edges_in_slave = 1
+        # Set self._max_nodes_in_subordinates and self._max_edges_in_subordinates. We can hard-code these values. 
+        self._max_nodes_in_subordinate = 2
+        self._max_edges_in_subordinate = 1
         # That's it. 
 
 
-    def _create_tree_slaves(self, max_depth=5, slave_list=None, spanning_trees=False):
+    def _create_tree_subordinates(self, max_depth=5, subordinate_list=None, spanning_trees=False):
         '''
-        Graph._create_tree_slaves: Create a list of tree-structured sub-problems. 
+        Graph._create_tree_subordinates: Create a list of tree-structured sub-problems. 
         Trees is detected in a greedy manner starting at the first node. 
         Any further trees are started at a node if there are any edges
         incident on that node that are not already in a tree. 
         '''
         
-        if slave_list is None:
+        if subordinate_list is None:
             # Create adjacency matrices. 
             if spanning_trees:
                 subtree_data = self._generate_spanning_trees_greedy()
             else:
                 subtree_data = self._generate_trees_greedy(max_depth=max_depth)
         else:
-            subtree_data = slave_list
+            subtree_data = subordinate_list
 
-        # Create free_node slaves: these contain nodes that do not have
+        # Create free_node subordinates: these contain nodes that do not have
         #    any edges incident on them. 
         free_nodes    = np.where(np.sum(self.adj_mat,axis=1) == 0)[0]
 
-        # The number of slaves
+        # The number of subordinates
         n_trees       = len(subtree_data)
         n_free_nodes  = free_nodes.size
-        self.n_slaves = n_trees + n_free_nodes
-        # The list of slaves.
-        self.slave_list = np.array([Slave() for i in range(self.n_slaves)])
+        self.n_subordinates = n_trees + n_free_nodes
+        # The list of subordinates.
+        self.subordinate_list = np.array([Subordinate() for i in range(self.n_subordinates)])
 
-        # Create each slave now. 
+        # Create each subordinate now. 
         for s_id in range(n_trees):
-            # Extract the adjacency matrices for this slave. 
+            # Extract the adjacency matrices for this subordinate. 
             tree_adj  = subtree_data[s_id][0]
             node_list = np.array(subtree_data[s_id][1], dtype=n_dtype)
             edge_list = np.array(subtree_data[s_id][2], dtype=n_dtype)
@@ -816,14 +816,14 @@ class Graph:
             n_labels         = np.zeros(n_nodes, dtype=l_dtype)
             n_labels[:]      = self.n_labels[node_list]
 
-            # The maximum cardinality of a node in this slave. 
+            # The maximum cardinality of a node in this subordinate. 
             s_max_n_labels   = np.max(n_labels)
 
-            # Update self._max_nodes_in_slave, and self._max_edges_in_slave
-            if self._max_nodes_in_slave < n_nodes:
-                self._max_nodes_in_slave = n_nodes
-            if self._max_edges_in_slave < n_edges:
-                self._max_edges_in_slave = n_edges
+            # Update self._max_nodes_in_subordinate, and self._max_edges_in_subordinate
+            if self._max_nodes_in_subordinate < n_nodes:
+                self._max_nodes_in_subordinate = n_nodes
+            if self._max_edges_in_subordinate < n_edges:
+                self._max_edges_in_subordinate = n_edges
 
             # Extract node energies. 
             node_energies    = np.zeros((n_nodes, s_max_n_labels), dtype=e_dtype)
@@ -842,23 +842,23 @@ class Graph:
                 try:
                     assert(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])] == edge_list[e])
                 except AssertionError:
-                    print 'Conflicting edge IDs in Graph._create_tree_slaves for slave %d.' %(s_id)
-                    print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])], edge_list[e])
-                    print 'Node ID in slave are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
+                    print 'Conflicting edge IDs in Graph._create_tree_subordinates for subordinate %d.' %(s_id)
+                    print 'Edge ID %d in Graph does not agree with ID %d in subordinate.' %(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])], edge_list[e])
+                    print 'Node ID in subordinate are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
                     return
 
-            # Set slave parameters. 
-            self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+            # Set subordinate parameters. 
+            self.subordinate_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
                     edge_energies, gs, 'tree')
 
-            # Add this slave to the lists of nodes and edges in node_list and edge_list
+            # Add this subordinate to the lists of nodes and edges in node_list and edge_list
             for n_id in node_list:
-                self.nodes_in_slaves[n_id] += [s_id]
+                self.nodes_in_subordinates[n_id] += [s_id]
             for e_id in edge_list:
-                self.edges_in_slaves[e_id] += [s_id]
+                self.edges_in_subordinates[e_id] += [s_id]
 
-        # Make slaves for free nodes now. 
-        for s_id in range(n_trees, self.n_slaves):
+        # Make subordinates for free nodes now. 
+        for s_id in range(n_trees, self.n_subordinates):
             # ID of this free node. 
             fn_id = s_id - n_trees
 
@@ -883,25 +883,25 @@ class Graph:
             # There is no graph struct
             graph_struct     = None
 
-            # Set slave parameters. 
-            self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+            # Set subordinate parameters. 
+            self.subordinate_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
                     edge_energies, graph_struct, 'free_node')
 
-            # Add this slave to the lists of nodes and edges in node_list and edge_list
+            # Add this subordinate to the lists of nodes and edges in node_list and edge_list
             for n_id in node_list:
-                self.nodes_in_slaves[n_id] += [s_id]
+                self.nodes_in_subordinates[n_id] += [s_id]
             for e_id in edge_list:
-                self.edges_in_slaves[e_id] += [s_id]
+                self.edges_in_subordinates[e_id] += [s_id]
 
-        # For convenience, make elements of self.nodes_in_slaves, and self.edges_in_slaves into
+        # For convenience, make elements of self.nodes_in_subordinates, and self.edges_in_subordinates into
         # Numpy arrays. 
-        self.nodes_in_slaves = [np.array(t) for t in self.nodes_in_slaves]
-        self.edges_in_slaves = [np.array(t) for t in self.edges_in_slaves]
+        self.nodes_in_subordinates = [np.array(t) for t in self.nodes_in_subordinates]
+        self.edges_in_subordinates = [np.array(t) for t in self.edges_in_subordinates]
         # C'est ca.
 
-    def _create_mixed_slaves(self, max_length=4, slave_list=None):
+    def _create_mixed_subordinates(self, max_length=4, subordinate_list=None):
         '''
-        Create mixed slaves. 
+        Create mixed subordinates. 
         This algorithm tries to find a small cycle for every node, i.e., it 
         iterates over the list of nodes, and for each node, tries to locate a cycle
         that that node is a part of. If no such cycle is found, the algorithm moves on.
@@ -961,9 +961,9 @@ class Graph:
 
         cycles = []
 
-        # If slave_list is not None, use the cycles specified in slave_list. 
-        if slave_list is not None:
-            cycles = slave_list
+        # If subordinate_list is not None, use the cycles specified in subordinate_list. 
+        if subordinate_list is not None:
+            cycles = subordinate_list
             # Remove edges from the graph that are already in these cycles. 
             for c_n in cycles:
                 for _n in range(len(c_n)):
@@ -1002,19 +1002,19 @@ class Graph:
         subtree_data = self._generate_trees_greedy(adjacency=adj_mat, max_depth=-1)     # Just using 2 for now. 
 
         # Finally, add any nodes that do not have any edges connected to them, 
-        #    and place them in slaves of their own. 
+        #    and place them in subordinates of their own. 
         free_nodes    = np.where(np.sum(self.adj_mat,axis=1) == 0)[0]
 
-        # The number of slaves is the length of cycles plus the length of subtree_data
+        # The number of subordinates is the length of cycles plus the length of subtree_data
         n_cycles      = len(cycles)
         n_trees       = len(subtree_data)
         n_free_nodes  = free_nodes.size
-        self.n_slaves = n_cycles + n_trees + n_free_nodes
+        self.n_subordinates = n_cycles + n_trees + n_free_nodes
 
-        # Create slave list. 
-        self.slave_list = np.array([Slave() for s in range(self.n_slaves)])
+        # Create subordinate list. 
+        self.subordinate_list = np.array([Subordinate() for s in range(self.n_subordinates)])
 
-        # Make cycle slaves first. 
+        # Make cycle subordinates first. 
         for s_id in range(n_cycles):
             # The current cycle. 
             c_n = cycles[s_id]
@@ -1032,18 +1032,18 @@ class Graph:
                 e_id         = self._edge_id_from_node_ids['%d %d' %(e0, e1)]
                 edge_list[i] = e_id
 
-            # The number of labels for nodes in this slave. 
+            # The number of labels for nodes in this subordinate. 
             n_labels       = np.zeros(n_nodes, dtype=l_dtype)
             n_labels[:]    = self.n_labels[node_list]
 
-            # Max label for this slave. 
+            # Max label for this subordinate. 
             s_max_n_labels = np.max(n_labels)
 
-            # Update self._max_nodes_in_slave, and self._max_edges_in_slave
-            if self._max_nodes_in_slave < n_nodes:
-                self._max_nodes_in_slave = n_nodes
-            if self._max_edges_in_slave < n_edges:
-                self._max_edges_in_slave = n_edges
+            # Update self._max_nodes_in_subordinate, and self._max_edges_in_subordinate
+            if self._max_nodes_in_subordinate < n_nodes:
+                self._max_nodes_in_subordinate = n_nodes
+            if self._max_edges_in_subordinate < n_edges:
+                self._max_edges_in_subordinate = n_edges
 
             # Node energies
             node_energies    = np.zeros((n_nodes, s_max_n_labels), dtype=e_dtype)
@@ -1061,30 +1061,30 @@ class Graph:
                 try:
                     assert(np.array_equal(edge_energies[e, :n_labels[i0], :n_labels[i1]], self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]]))
                 except AssertionError:
-                    print 'In slave %d, ' %(s_id)
+                    print 'In subordinate %d, ' %(s_id)
                     print node_list, edge_list
                     print 'Edge %d, %d -> %d, is not consistent with transposing energies.' %(e, i0, i1)
-                    print 'edge_energies in slave:', edge_energies[e, :n_labels[i0], :n_labels[i1]].shape
+                    print 'edge_energies in subordinate:', edge_energies[e, :n_labels[i0], :n_labels[i1]].shape
                     print edge_energies[e, :n_labels[i0], :n_labels[i1]]
                     print 'edge_energies in Graph:', self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]].shape
                     print self.edge_energies[edge_list[e], :self.n_labels[e0], :self.n_labels[e1]]
                     return
 
-            # Set slave parameters. 
-            self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
+            # Set subordinate parameters. 
+            self.subordinate_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, edge_energies, None, 'cycle')
 
-            # Add this slave to the lists of nodes and edges in node_list and edge_list
+            # Add this subordinate to the lists of nodes and edges in node_list and edge_list
             for n_id in node_list:
-                self.nodes_in_slaves[n_id] += [s_id]
+                self.nodes_in_subordinates[n_id] += [s_id]
             for e_id in edge_list:
-                self.edges_in_slaves[e_id] += [s_id]
+                self.edges_in_subordinates[e_id] += [s_id]
 
-        # Now make tree slaves. 
+        # Now make tree subordinates. 
         for s_id in range(n_cycles, n_cycles + n_trees):
             # Tree ID is n_cycles less than s_id. 
             t_id      = s_id - n_cycles
 
-            # Extract the adjacency matrices for this slave. 
+            # Extract the adjacency matrices for this subordinate. 
             tree_adj  = subtree_data[t_id][0]
             node_list = np.array(subtree_data[t_id][1], dtype=n_dtype)
             edge_list = np.array(subtree_data[t_id][2], dtype=n_dtype)
@@ -1097,14 +1097,14 @@ class Graph:
             n_labels         = np.zeros(n_nodes, dtype=l_dtype)
             n_labels[:]      = self.n_labels[node_list]
 
-            # Max label for this slave. 
+            # Max label for this subordinate. 
             s_max_n_labels = np.max(n_labels)
 
-            # Update self._max_nodes_in_slave, and self._max_edges_in_slave
-            if self._max_nodes_in_slave < n_nodes:
-                self._max_nodes_in_slave = n_nodes
-            if self._max_edges_in_slave < n_edges:
-                self._max_edges_in_slave = n_edges
+            # Update self._max_nodes_in_subordinate, and self._max_edges_in_subordinate
+            if self._max_nodes_in_subordinate < n_nodes:
+                self._max_nodes_in_subordinate = n_nodes
+            if self._max_edges_in_subordinate < n_edges:
+                self._max_edges_in_subordinate = n_edges
 
             # Extract node energies. 
             node_energies    = np.zeros((n_nodes, s_max_n_labels), dtype=e_dtype)
@@ -1118,7 +1118,7 @@ class Graph:
             # Extract edge energies.
             edge_energies    = np.zeros((n_edges, s_max_n_labels, s_max_n_labels), dtype=e_dtype)
             edge_energies[:] = self.edge_energies[edge_list, 0:s_max_n_labels, 0:s_max_n_labels]
-            # Here, we must adjust self.edge_energies before transferring them to a slave. 
+            # Here, we must adjust self.edge_energies before transferring them to a subordinate. 
             # This is because self.edge_energies always has energies for an edge from a lower node index
             #    to a higher node index, but this convention might not be followed in the adjacency
             #    matrix returned for the tree. 
@@ -1140,8 +1140,8 @@ class Graph:
 #               else:
 #                   edge_energies[_e, 0:n_labels[i0], 0:n_labels[i1]] = self.edge_energies[e_id, 0:self.n_labels[e1], 0:self.n_labels[e0]].T
 
-            # Set slave parameters. 
-            self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+            # Set subordinate parameters. 
+            self.subordinate_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
                     edge_energies, gs, 'tree')
 
             # Verify that everything is consistent. 
@@ -1150,20 +1150,20 @@ class Graph:
                 try:
                     assert(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])] == edge_list[e])
                 except AssertionError:
-                    print 'In slave %d, ' %(s_id)
-                    print 'Conflicting edge IDs in Graph._create_tree_slaves.'
-                    print 'Edge ID %d in Graph does not agree with ID %d in slave.' %(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])], edge_list[e])
-                    print 'Node ID in slave are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
+                    print 'In subordinate %d, ' %(s_id)
+                    print 'Conflicting edge IDs in Graph._create_tree_subordinates.'
+                    print 'Edge ID %d in Graph does not agree with ID %d in subordinate.' %(self._edge_id_from_node_ids['%d %d' %(node_list[e0], node_list[e1])], edge_list[e])
+                    print 'Node ID in subordinate are (%d, %d), and in Graph are (%d, %d)' %(e0, e1, node_list[e0], node_list[e1])
                     return
 
-            # Add this slave to the lists of nodes and edges in node_list and edge_list
+            # Add this subordinate to the lists of nodes and edges in node_list and edge_list
             for n_id in node_list:
-                self.nodes_in_slaves[n_id] += [s_id]
+                self.nodes_in_subordinates[n_id] += [s_id]
             for e_id in edge_list:
-                self.edges_in_slaves[e_id] += [s_id]
+                self.edges_in_subordinates[e_id] += [s_id]
 
-        # Make slaves for free nodes now. 
-        for s_id in range(n_cycles + n_trees, self.n_slaves):
+        # Make subordinates for free nodes now. 
+        for s_id in range(n_cycles + n_trees, self.n_subordinates):
             # ID of this free node. 
             fn_id = s_id - n_cycles - n_trees
 
@@ -1188,25 +1188,25 @@ class Graph:
             # There is no graph struct
             graph_struct     = None
 
-            # Set slave parameters. 
-            self.slave_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
+            # Set subordinate parameters. 
+            self.subordinate_list[s_id].set_params(node_list, edge_list, node_energies, n_labels, \
                     edge_energies, graph_struct, 'free_node')
 
-            # Add this slave to the lists of nodes and edges in node_list and edge_list
+            # Add this subordinate to the lists of nodes and edges in node_list and edge_list
             for n_id in node_list:
-                self.nodes_in_slaves[n_id] += [s_id]
+                self.nodes_in_subordinates[n_id] += [s_id]
             for e_id in edge_list:
-                self.edges_in_slaves[e_id] += [s_id]
+                self.edges_in_subordinates[e_id] += [s_id]
 
 
-        # For convenience, make elements of self.nodes_in_slaves, and self.edges_in_slaves into
+        # For convenience, make elements of self.nodes_in_subordinates, and self.edges_in_subordinates into
         # Numpy arrays. 
-        self.nodes_in_slaves = [np.array(t) for t in self.nodes_in_slaves]
-        self.edges_in_slaves = [np.array(t) for t in self.edges_in_slaves]
+        self.nodes_in_subordinates = [np.array(t) for t in self.nodes_in_subordinates]
+        self.edges_in_subordinates = [np.array(t) for t in self.edges_in_subordinates]
         # C'est ca.
 
 
-    def _create_custom_slaves(self, slave_list):
+    def _create_custom_subordinates(self, subordinate_list):
         '''
         Create a custom decomposition of the Graph. This function allows the user to 
         create a custom decomposition of the graph and apply this decomposition on 
@@ -1214,62 +1214,62 @@ class Graph:
 
         Inputs
         ======
-            slave_list: A series of instances of type Slave. Could 
-                        be a list or a Numpy array. Each member of 'slave_list' 
-                        must be of type Slave, and have all the required members
+            subordinate_list: A series of instances of type Subordinate. Could 
+                        be a list or a Numpy array. Each member of 'subordinate_list' 
+                        must be of type Subordinate, and have all the required members
                         initialised. 
     
         '''
 
         # Convert to Numpy array. 
-        slave_list = np.array(slave_list)
+        subordinate_list = np.array(subordinate_list)
 
-        # Assign to self.slave_list
-        self.slave_list = slave_list
+        # Assign to self.subordinate_list
+        self.subordinate_list = subordinate_list
 
-        # The number of slaves. 
-        self.n_slaves = slave_list.size
+        # The number of subordinates. 
+        self.n_subordinates = subordinate_list.size
 
-        for s_id in range(self.n_slaves):
+        for s_id in range(self.n_subordinates):
             # Get node and edge lists. 
-            node_list = slave_list[s_id].node_list 
-            edge_list = slave_list[s_id].edge_list
+            node_list = subordinate_list[s_id].node_list 
+            edge_list = subordinate_list[s_id].edge_list
 
             # Number of nodes and edges. 
             n_nodes   = node_list.size
             n_edges   = edge_list.size
 
-            # Update self._max_nodes_in_slave, and self._max_edges_in_slave
-            if self._max_nodes_in_slave < n_nodes:
-                self._max_nodes_in_slave = n_nodes
-            if self._max_edges_in_slave < n_edges:
-                self._max_edges_in_slave = n_edges
+            # Update self._max_nodes_in_subordinate, and self._max_edges_in_subordinate
+            if self._max_nodes_in_subordinate < n_nodes:
+                self._max_nodes_in_subordinate = n_nodes
+            if self._max_edges_in_subordinate < n_edges:
+                self._max_edges_in_subordinate = n_edges
 
-            # Add them to nodes_in_slaves and edges_in_slaves. 
+            # Add them to nodes_in_subordinates and edges_in_subordinates. 
             for n_id in node_list:
-                self.nodes_in_slaves[n_id] += [s_id]
+                self.nodes_in_subordinates[n_id] += [s_id]
             for e_id in edge_list:
-                self.edges_in_slaves[e_id] += [s_id]
+                self.edges_in_subordinates[e_id] += [s_id]
 
-        # Convert lists in self.nodes_in_slaves and self.edges_in_slaves to 
+        # Convert lists in self.nodes_in_subordinates and self.edges_in_subordinates to 
         #    Numpy arrays for convenience. 
-        self.nodes_in_slaves = [np.array(t) for t in self.nodes_in_slaves]
-        self.edges_in_slaves = [np.array(t) for t in self.edges_in_slaves]
+        self.nodes_in_subordinates = [np.array(t) for t in self.nodes_in_subordinates]
+        self.edges_in_subordinates = [np.array(t) for t in self.edges_in_subordinates]
 
 
 
     def optimise(self, a_start=1.0, max_iter=1000, decomposition='tree', strategy='step', algorithm='subgradient', 
-            max_depth=2, _momentum=1.0, slave_list=None, _verbose=True, _resume=False, _create_slaves=True):
+            max_depth=2, _momentum=1.0, subordinate_list=None, _verbose=True, _resume=False, _create_subordinates=True):
         '''
         Graph.optimise(): Optimise the set energies over the graph and return a labelling. 
 
         Takes as input a_start, which is a float and denotes the starting value of \\alpha_t in
         the DD-MRF algorithm. 
 
-        struct specifies the type of decomposition to use. struct must be in slave_types. 
+        struct specifies the type of decomposition to use. struct must be in subordinate_types. 
         'cell' specifies a decomposition in which the graph in broken into 2x2 cells - each 
-        being a slave. 'row_col' specifies a decomposition in which the graph is broken into
-        rows and columns - each being a slave. 
+        being a subordinate. 'row_col' specifies a decomposition in which the graph is broken into
+        rows and columns - each being a subordinate. 
 
         The strategy signifies what values of \\alpha to use at iteration t. Permissible 
         values are 'step' and 'adaptive'. The step strategy simply sets 
@@ -1292,7 +1292,7 @@ class Graph:
             # Check if a permissible decomposition is used. 
             if decomposition not in decomposition_types:
                 print 'Permissible values for decomposition are \'tree\', and \'custom\' .'
-                print 'Custom decomposition must be specified in the form of a list of slaves if \'custom\' is chosen.'
+                print 'Custom decomposition must be specified in the form of a list of subordinates if \'custom\' is chosen.'
                 raise ValueError
 
             # Check if a permissible algorithm is used. 
@@ -1337,13 +1337,13 @@ class Graph:
             # Set the optimisation strategy. 
             self._optim_strategy = strategy
     
-            # Create slaves. This creates a list of slaves and stores it in 
-            #   self.slave_list. The numbering of the slaves starts from the top-left,
+            # Create subordinates. This creates a list of subordinates and stores it in 
+            #   self.subordinate_list. The numbering of the subordinates starts from the top-left,
             #   and continues in row-major fashion. For example, there are 
-            #   (self.rows-1)*(self.cols-1) slaves if the 'cell' decomposition is used. 
-            if _create_slaves:
+            #   (self.rows-1)*(self.cols-1) subordinates if the 'cell' decomposition is used. 
+            if _create_subordinates:
                 self.decomposition = decomposition
-                self.create_slaves(decomposition=self.decomposition, max_depth=max_depth, slave_list=slave_list)
+                self.create_subordinates(decomposition=self.decomposition, max_depth=max_depth, subordinate_list=subordinate_list)
                 if _verbose:
                     print 'Checking decomposition ... ', 
                 if self.check_decomposition():
@@ -1353,23 +1353,23 @@ class Graph:
                     print 'Conflicts found (listed above). Please fix the decomposition before attempting to run Graph.optimise().'
                     return
     
-            # Create update variables for slaves. Created once, reset to zero each time
+            # Create update variables for subordinates. Created once, reset to zero each time
             #   _compute_param_updates() and _apply_param_updates() are called. 
-            self._slave_node_up = np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels), dtype=u_dtype)
-            self._slave_edge_up = np.zeros((self.n_slaves, self._max_edges_in_slave, self.max_n_labels, self.max_n_labels), dtype=u_dtype)
+            self._subordinate_node_up = np.zeros((self.n_subordinates, self._max_nodes_in_subordinate, self.max_n_labels), dtype=u_dtype)
+            self._subordinate_edge_up = np.zeros((self.n_subordinates, self._max_edges_in_subordinate, self.max_n_labels, self.max_n_labels), dtype=u_dtype)
             # Create a copy of these to hold the previous state update. Akin to momentum
             #   update used in NNs. 
-            self._prv_node_sg   = np.zeros_like(self._slave_node_up)
-            self._prv_edge_sg   = np.zeros_like(self._slave_edge_up)
-            # Array to mark slaves for updates. 
+            self._prv_node_sg   = np.zeros_like(self._subordinate_node_up)
+            self._prv_edge_sg   = np.zeros_like(self._subordinate_edge_up)
+            # Array to mark subordinates for updates. 
             # The first row corresponds to node updates, while the second to edge updates. 
-            self._mark_sl_up    = np.zeros((2,self.n_slaves), dtype=np.int8)
+            self._mark_sl_up    = np.zeros((2,self.n_subordinates), dtype=np.int8)
     
             # How much momentum to use. Must be in [0, 1)
             self._momentum = _momentum
         
-            # Set all slaves to be solved at first. 
-            self._slaves_to_solve   = np.arange(self.n_slaves)
+            # Set all subordinates to be solved at first. 
+            self._subordinates_to_solve   = np.arange(self.n_subordinates)
     
             # Two lists to record the primal and dual cost progression
             self.dual_costs         = []
@@ -1406,11 +1406,11 @@ class Graph:
         # Loop till not converged. 
         while not converged and it <= max_iter:
             if _verbose:
-                print 'Iteration %5d. Solving %5d subproblems ...' %(self.it, self._slaves_to_solve.size),
-            # Solve all the slaves. 
-            # The following optimises the energy for each slave, and stores the 
-            #    resulting labelling as a member in the slaves. 
-            self._optimise_slaves()
+                print 'Iteration %5d. Solving %5d subproblems ...' %(self.it, self._subordinates_to_solve.size),
+            # Solve all the subordinates. 
+            # The following optimises the energy for each subordinate, and stores the 
+            #    resulting labelling as a member in the subordinates. 
+            self._optimise_subordinates()
             if _verbose:
                 print 'done.',
             sys.stdout.flush()
@@ -1441,12 +1441,12 @@ class Graph:
                 self._compute_param_updates_BC(a_start)
 
 
-            # Verify whether the algorithm has converged. If all slaves agree
+            # Verify whether the algorithm has converged. If all subordinates agree
             #    on the labelling of every node, we have convergence. 
             if disagreements.size == 0:
                 print 'Converged after %d iterations!\n' %(self.it)
                 print 'At convergence, PRIMAL = %.6f, DUAL = %.6f, Gap = %.6f.' %(primal_cost, dual_cost, primal_cost - dual_cost)
-#               self._assign_labels()           # Use this if you want to infer a PRIMAL solution from the final state of the slaves instead.
+#               self._assign_labels()           # Use this if you want to infer a PRIMAL solution from the final state of the subordinates instead.
                 # Break from loop.
                 converged = True
                 break
@@ -1459,7 +1459,7 @@ class Graph:
                 self.force_naive_search(disagreements, response='y')
                 break
 
-            # Apply updates to parameters of each slave. 
+            # Apply updates to parameters of each subordinate. 
             self._apply_param_updates()
 
             # Print statistics. .
@@ -1475,56 +1475,56 @@ class Graph:
         print 'The best labelling is stored as a member \'labels\' in the object.'
         print 'Best PRIMAL = %.6f, Best DUAL = %.6f, Gap = %.6f' %(self._best_primal_cost, self._best_dual_cost, self._best_primal_cost - self._best_dual_cost)
         
-    def _optimise_slaves(self):
+    def _optimise_subordinates(self):
         '''
-        A function to optimise all slaves. This function distributes the job of
-        optimising every slave to all but one cores on the machine. 
+        A function to optimise all subordinates. This function distributes the job of
+        optimising every subordinate to all but one cores on the machine. 
         '''
-        # Extract the list of slaves to be optimised. This contains of all the slaves that #   disagree with at least one other slave on the labelling of at least one node. 
-        _to_solve   = [self.slave_list[i] for i in self._slaves_to_solve]
+        # Extract the list of subordinates to be optimised. This contains of all the subordinates that #   disagree with at least one other subordinate on the labelling of at least one node. 
+        _to_solve   = [self.subordinate_list[i] for i in self._subordinates_to_solve]
 
-        # Optimise the slaves. 
+        # Optimise the subordinates. 
 # =================== Using Joblib =====================
-        if self._slaves_to_solve.size > 0:
+        if self._subordinates_to_solve.size > 0:
             # The number of cores to use is the number of cores on the machine minus 1. 
             # Use only as many cores as needed. 
-            n_cores     = min([cpu_count() - 1, self._slaves_to_solve.size])
-            optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_slave)(s) for s in _to_solve)
+            n_cores     = min([cpu_count() - 1, self._subordinates_to_solve.size])
+            optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_subordinate)(s) for s in _to_solve)
 # ======================================================
 
 # =============== Using multiprocessing ================
-#        # Refer to the global shared_slave_list
-#        global shared_slave_list
-#        # Populate the shared list with slaves to solve. 
-#        for i in self._slaves_to_solve:
-#            shared_slave_list.append(self.slave_list[i])
+#        # Refer to the global shared_subordinate_list
+#        global shared_subordinate_list
+#        # Populate the shared list with subordinates to solve. 
+#        for i in self._subordinates_to_solve:
+#            shared_subordinate_list.append(self.subordinate_list[i])
 #        
 ##        optima = []
-##        for s in shared_slave_list:
-##            optima.append(_optimise_slave(s))
+##        for s in shared_subordinate_list:
+##            optima.append(_optimise_subordinate(s))
 #       
 #        # Create a pool of workers. 
 #        multp_pool  = multiprocessing.Pool(processes=8)
-#        # Distribute the evaluation of _optimise_slave_mp over n_cores cores. 
-#        optima      = multp_pool.map(_optimise_slave_mp, range(self._slaves_to_solve.size))
+#        # Distribute the evaluation of _optimise_subordinate_mp over n_cores cores. 
+#        optima      = multp_pool.map(_optimise_subordinate_mp, range(self._subordinates_to_solve.size))
 #        # Finish the closure. 
 #        multp_pool.terminate()
-#        # Reset shared_slave_list to zero. We still want shared_slave_list to be 
+#        # Reset shared_subordinate_list to zero. We still want shared_subordinate_list to be 
 #        #    the of the type that it is. 
-#        del shared_slave_list[:]
+#        del shared_subordinate_list[:]
 # ======================================================
 
 # ================== Using threading ===================
 #        # Create closure to pass to thread. 
-#        optima = [[] for i in range(self._slaves_to_solve.size)]
-#        def _optimise_slave_th(i, si):
-#            ret = _optimise_slave(self.slave_list[si])
+#        optima = [[] for i in range(self._subordinates_to_solve.size)]
+#        def _optimise_subordinate_th(i, si):
+#            ret = _optimise_subordinate(self.subordinate_list[si])
 #            optima[i] = ret
 #
 #        # Create threads. 
 #        threads = []
-#        for i in range(self._slaves_to_solve.size):
-#            t = threading.Thread(target=_optimise_slave_th, args=(i,self._slaves_to_solve[i]))
+#        for i in range(self._subordinates_to_solve.size):
+#            t = threading.Thread(target=_optimise_subordinate_th, args=(i,self._subordinates_to_solve[i]))
 #            threads.append(t)
 #
 #        # Launch and synchronise.
@@ -1538,19 +1538,19 @@ class Graph:
         else:
             optima = []
             for s in _to_solve:
-                optima.append(_optimise_slave(s))
+                optima.append(_optimise_subordinate(s))
 # ======================================================
 
-        # Reflect the result in slave list for our Graph. 
-        for i in range(self._slaves_to_solve.size):
-            s_id = self._slaves_to_solve[i]
-            self.slave_list[s_id].set_labels(optima[i][0])
-            self.slave_list[s_id]._energy = optima[i][1]
-            if self.slave_list[s_id].struct == 'tree':
-                self.slave_list[s_id]._messages    = optima[i][2]
-                self.slave_list[s_id]._messages_in = optima[i][3]
+        # Reflect the result in subordinate list for our Graph. 
+        for i in range(self._subordinates_to_solve.size):
+            s_id = self._subordinates_to_solve[i]
+            self.subordinate_list[s_id].set_labels(optima[i][0])
+            self.subordinate_list[s_id]._energy = optima[i][1]
+            if self.subordinate_list[s_id].struct == 'tree':
+                self.subordinate_list[s_id]._messages    = optima[i][2]
+                self.subordinate_list[s_id]._messages_in = optima[i][3]
 
-    # End of Graph._optimise_slaves()
+    # End of Graph._optimise_subordinates()
 
 
     def check_decomposition(self):
@@ -1559,7 +1559,7 @@ class Graph:
         To optimise, the dual and the primal must be in agreement. 
         '''
         # Iterate over nodes to check that node energies are split
-        #    correctly among slaves. 
+        #    correctly among subordinates. 
 
         flag = True
         numel = self.n_nodes + self.n_edges
@@ -1578,11 +1578,11 @@ class Graph:
                 sys.stdout.write('.')
                 sys.stdout.flush()
             _n_energy = 0.0
-            for s_id in self.nodes_in_slaves[n_id]:
-                n_id_in_s = self.slave_list[s_id].node_map[n_id]
+            for s_id in self.nodes_in_subordinates[n_id]:
+                n_id_in_s = self.subordinate_list[s_id].node_map[n_id]
                 n_lbl     = self.n_labels[n_id]
 
-                _n_energy += self.slave_list[s_id].node_energies[n_id_in_s, :n_lbl]
+                _n_energy += self.subordinate_list[s_id].node_energies[n_id_in_s, :n_lbl]
             if not _array_equal(_n_energy, self.node_energies[n_id, :n_lbl]):
                 print '\nGraph.check_decomposition: Dual decomposition disagreement for node %d.' %(n_id)
                 print 'Graph.check_decomposition: Node energies in PRIMAL are '
@@ -1598,9 +1598,9 @@ class Graph:
             x, y             = self._node_ids_from_edge_id[e_id]
             n_lbl_x, n_lbl_y = self.n_labels[x], self.n_labels[y]
             _e_energy        = np.zeros((n_lbl_x, n_lbl_y))
-            for s_id in self.edges_in_slaves[e_id]:
-                e_id_in_s        = self.slave_list[s_id].edge_map[e_id]
-                _e_energy    += self.slave_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
+            for s_id in self.edges_in_subordinates[e_id]:
+                e_id_in_s        = self.subordinate_list[s_id].edge_map[e_id]
+                _e_energy    += self.subordinate_list[s_id].edge_energies[e_id_in_s, :n_lbl_x, :n_lbl_y]
             if not _array_equal(_e_energy, self.edge_energies[e_id, :n_lbl_x, :n_lbl_y]):
                 print '\nGraph.check_decomposition: Dual decomposition disagreement for edge %d, with edge_ends %d and %d.' %(e_id, x, y)
                 print 'Graph.check_decomposition: Edge energies in PRIMAL are '
@@ -1614,18 +1614,18 @@ class Graph:
 
     def _compute_param_updates_SG(self, a_start):
         '''
-        Compute parameter updates for slaves. 
+        Compute parameter updates for subordinates. 
         Updates are computed after every iteration. 
         This function calls _compute_param_updates_SG_parallel, or 
         _compute_param_updates_SG_sequential, based on the number
-        of slaves to be solved. In case they are few in number, 
+        of subordinates to be solved. In case they are few in number, 
         the overhead of starting multiple threads to compute
         updates to all of them dominates the execution time, and
         hence it is simpler to compute them sequentially. 
         '''
 
-        # Flags to determine whether to solve a slave.
-        slave_flags = np.zeros(self.n_slaves, dtype=bool)
+        # Flags to determine whether to solve a subordinate.
+        subordinate_flags = np.zeros(self.n_subordinates, dtype=bool)
 
         # The L2-norm of the subgradient. This is calculated incrementally.
         norm_gt = 0.0
@@ -1634,27 +1634,27 @@ class Graph:
         #   vectors so that updates can be very easily calculated using array operations!
         # A huge speed up is expected. 
         # Con: Memory usage is increased. 
-        # Reset update variables for slaves. 
-        self._slave_node_up[:] = 0.0
-        self._slave_edge_up[:] = 0.0
+        # Reset update variables for subordinates. 
+        self._subordinate_node_up[:] = 0.0
+        self._subordinate_edge_up[:] = 0.0
 
         # Set self._sg_node also to zero. 
         #self._sg_node[:,:]     = 0
 
-        # Mark which slaves need updates. A slave s_id needs update only if self._slave_node_up[s_id] 
+        # Mark which subordinates need updates. A subordinate s_id needs update only if self._subordinate_node_up[s_id] 
         #   has non-zero values in the end.
         self._mark_sl_up[:] = 0
 
-        # How many slaves are to be solved?
-        n_slaves_to_solve = self._slaves_to_solve.size
+        # How many subordinates are to be solved?
+        n_subordinates_to_solve = self._subordinates_to_solve.size
         # A simple heuristic. 
-        if n_slaves_to_solve > 1e10:
+        if n_subordinates_to_solve > 1e10:
             norm_gt = self._compute_param_updates_SG_parallel(a_start)
         else:
             norm_gt = self._compute_param_updates_SG_sequential(a_start)
             
-        # Reset the slaves to solve. 
-        self._slaves_to_solve = np.where(np.sum(self._mark_sl_up, axis=0)!=0)[0].astype(n_dtype)
+        # Reset the subordinates to solve. 
+        self._subordinates_to_solve = np.where(np.sum(self._mark_sl_up, axis=0)!=0)[0].astype(n_dtype)
 
         # Record the norm of the subgradient. 
         self.subgradient_norms += [norm_gt]
@@ -1682,13 +1682,13 @@ class Graph:
                 rho_t = self._momentum*(self.alpha/a_start)
             else:
                 rho_t = self._momentum
-            self._slave_node_up = rho_t*self._slave_node_up + (1.0 - rho_t)*self._prv_node_sg
-            self._slave_edge_up = rho_t*self._slave_edge_up + (1.0 - rho_t)*self._prv_edge_sg
+            self._subordinate_node_up = rho_t*self._subordinate_node_up + (1.0 - rho_t)*self._prv_node_sg
+            self._subordinate_edge_up = rho_t*self._subordinate_edge_up + (1.0 - rho_t)*self._prv_edge_sg
 
 
     def _compute_param_updates_SG_parallel(self, a_start):
         ''' 
-        Compute parameter updates for slaves, in a parallel manner. 
+        Compute parameter updates for subordinates, in a parallel manner. 
         '''
 
         # How many nodes and edges to check for updates. 
@@ -1703,12 +1703,12 @@ class Graph:
 
         # Define a function to compute updates for nodes. 
         def node_updates(n_con, n_id):
-            # Retrieve the list of slaves that use this node. 
-            s_ids           = self.nodes_in_slaves[n_id]
-            n_slaves_nid    = s_ids.size
+            # Retrieve the list of subordinates that use this node. 
+            s_ids           = self.nodes_in_subordinates[n_id]
+            n_subordinates_nid    = s_ids.size
     
-            # Retrieve labels assigned to this point by each slave ...
-            ls_int_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+            # Retrieve labels assigned to this point by each subordinate ...
+            ls_int_     = [self.subordinate_list[s].get_node_label(n_id) for s in s_ids]
             nl_n        = self.n_labels[n_id]
             # ... and make them into one-hot vectors. The previous is needed by self._sg_node. 
             ls_         = np.array([make_one_hot(l_int, nl_n) for l_int in ls_int_])
@@ -1717,75 +1717,75 @@ class Graph:
             # Check if all labellings for this node agree. 
             if np.max(ls_avg_) == 1:
                 # As all vectors are one-hot, this condition being true implies that 
-                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   all subordinates assigned the same label to this node (otherwise, the maximum
                 #   number in ls_avg_ would be less than 1).
                 return
     
-            # The next step was to iterate over all slaves. We calculate the subgradient here
+            # The next step was to iterate over all subordinates. We calculate the subgradient here
             #   given by 
             #   
             #    \delta_\lambda^s_p = x^s_p - ls_avg_
             #
-            #   for all s. s here signifies slaves. 
+            #   for all s. s here signifies subordinates. 
             # This can be very easily done with array operations!
             _node_up    = ls_ - ls_avg_
 
             # Add to the subgradient, self._sg_node
             #self._sg_node[n_id, :self.n_labels[n_id]] = np.sum(ls_, axis=0)
     
-            # Find the node ID for n_id in each slave in s_ids. 
-            sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
+            # Find the node ID for n_id in each subordinate in s_ids. 
+            sl_nids     = [self.subordinate_list[s].node_map[n_id] for s in s_ids]
     
             # Mark this update to be done later. 
-            self._slave_node_up[s_ids, sl_nids, :nl_n]  = _node_up #:self.n_labels[n_id]] = _node_up
+            self._subordinate_node_up[s_ids, sl_nids, :nl_n]  = _node_up #:self.n_labels[n_id]] = _node_up
             # Add this value to the subgradient. 
             arr_norm_gt[n_con] = np.sum(_node_up**2)
-            # Mark this slave for node updates. 
+            # Mark this subordinate for node updates. 
             self._mark_sl_up[0, s_ids] = 1
     
         # That completes the updates for node energies. Now we move to edge energies. 
         def edge_updates(e_con, e_id):
-            # Retrieve the list of slaves that use this edge. 
-            s_ids           = self.edges_in_slaves[e_id]
-            n_slaves_eid    = s_ids.size
+            # Retrieve the list of subordinates that use this edge. 
+            s_ids           = self.edges_in_subordinates[e_id]
+            n_subordinates_eid    = s_ids.size
 
-            # Retrieve labellings of this edge, assigned by each slave.
+            # Retrieve labellings of this edge, assigned by each subordinate.
             x, y          = self._node_ids_from_edge_id[e_id]
             # n_lables for x and y
             nl_x, nl_y    = self.n_labels[x], self.n_labels[y]
-            ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
+            ls_int_       = [(self.subordinate_list[s].get_node_label(x), self.subordinate_list[s].get_node_label(y)) for s in s_ids]
             ls_           = np.array([make_one_hot(l_int, nl_x, nl_y) for l_int in ls_int_])
             ls_avg_       = np.mean(ls_, axis=0, keepdims=True)
 
             # Check if all labellings for this node agree. 
             if np.max(ls_avg_) == 1:
                 # As all vectors are one-hot, this condition being true implies that 
-                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   all subordinates assigned the same label to this node (otherwise, the maximum
                 #   number in ls_avg_ would be less than 1).
                 return 
 
-            # The next step was to iterate over all slaves. We calculate the subgradient here
+            # The next step was to iterate over all subordinates. We calculate the subgradient here
             #   given by 
             #   
             #    \delta_\lambda^s_p = x^s_p - ls_avg_
             #
-            #   for all s. s here signifies slaves. 
+            #   for all s. s here signifies subordinates. 
             # This can be very easily done with array operations!
             _edge_up    = ls_ - ls_avg_
     
-            # Find the edge ID for e_id in each slave in s_ids. 
-            sl_eids = [self.slave_list[s].edge_map[e_id] for s in s_ids]
+            # Find the edge ID for e_id in each subordinate in s_ids. 
+            sl_eids = [self.subordinate_list[s].edge_map[e_id] for s in s_ids]
     
             # Mark this update to be done later. 
-            self._slave_edge_up[s_ids, sl_eids, :nl_x, :nl_y] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
+            self._subordinate_edge_up[s_ids, sl_eids, :nl_x, :nl_y] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
             
             # Add this value to the subgradient. 
             arr_norm_gt[e_con + _n_check_nodes] = np.sum(_edge_up**2)
-            # Mark this slave for edge updates. 
+            # Mark this subordinate for edge updates. 
             self._mark_sl_up[1, s_ids] = 1
 
-        # We iterate over nodes and edges which associate with at least two slaves
-        #    and calculate updates to parameters of all slaves. 
+        # We iterate over nodes and edges which associate with at least two subordinates
+        #    and calculate updates to parameters of all subordinates. 
         # Create threads to solve this problem. 
         threads = []
         for n in range(_n_check_nodes):
@@ -1809,21 +1809,21 @@ class Graph:
     
     def _compute_param_updates_SG_sequential(self, a_start):
         '''
-        Compute parameter updates for slaves, in a sequential manner. 
+        Compute parameter updates for subordinates, in a sequential manner. 
         '''
 
         # Subgradient norm. 
         norm_gt = 0.0
 
-        # We iterate over nodes and edges which associate with at least two slaves
-        #    and calculate updates to parameters of all slaves. 
+        # We iterate over nodes and edges which associate with at least two subordinates
+        #    and calculate updates to parameters of all subordinates. 
         for n_id in self._check_nodes:
-            # Retrieve the list of slaves that use this node. 
-            s_ids           = self.nodes_in_slaves[n_id]
-            n_slaves_nid    = s_ids.size
+            # Retrieve the list of subordinates that use this node. 
+            s_ids           = self.nodes_in_subordinates[n_id]
+            n_subordinates_nid    = s_ids.size
     
-            # Retrieve labels assigned to this point by each slave ...
-            ls_int_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+            # Retrieve labels assigned to this point by each subordinate ...
+            ls_int_     = [self.subordinate_list[s].get_node_label(n_id) for s in s_ids]
             nl_n        = self.n_labels[n_id]
             # ... and make them into one-hot vectors. The previous is needed by self._sg_node. 
             ls_         = np.array([make_one_hot(l_int, nl_n) for l_int in ls_int_])
@@ -1832,70 +1832,70 @@ class Graph:
             # Check if all labellings for this node agree. 
             if np.max(ls_avg_) == 1:
                 # As all vectors are one-hot, this condition being true implies that 
-                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   all subordinates assigned the same label to this node (otherwise, the maximum
                 #   number in ls_avg_ would be less than 1).
                 continue
     
-            # The next step was to iterate over all slaves. We calculate the subgradient here
+            # The next step was to iterate over all subordinates. We calculate the subgradient here
             #   given by 
             #   
             #    \delta_\lambda^s_p = x^s_p - ls_avg_
             #
-            #   for all s. s here signifies slaves. 
+            #   for all s. s here signifies subordinates. 
             # This can be very easily done with array operations!
             _node_up    = ls_ - ls_avg_
 
             # Add to the subgradient, self._sg_node
             #self._sg_node[n_id, :self.n_labels[n_id]] = np.sum(ls_, axis=0)
     
-            # Find the node ID for n_id in each slave in s_ids. 
-            sl_nids     = [self.slave_list[s].node_map[n_id] for s in s_ids]
+            # Find the node ID for n_id in each subordinate in s_ids. 
+            sl_nids     = [self.subordinate_list[s].node_map[n_id] for s in s_ids]
     
             # Mark this update to be done later. 
-            self._slave_node_up[s_ids, sl_nids, :nl_n]  = _node_up #:self.n_labels[n_id]] = _node_up
+            self._subordinate_node_up[s_ids, sl_nids, :nl_n]  = _node_up #:self.n_labels[n_id]] = _node_up
             # Add this value to the subgradient. 
             norm_gt += np.sum(_node_up**2)
-            # Mark this slave for node updates. 
+            # Mark this subordinate for node updates. 
             self._mark_sl_up[0, s_ids] = 1
     
         # That completes the updates for node energies. Now we move to edge energies. 
         for e_id in self._check_edges:
-            # Retrieve the list of slaves that use this edge. 
-            s_ids           = self.edges_in_slaves[e_id]
-            n_slaves_eid    = s_ids.size
+            # Retrieve the list of subordinates that use this edge. 
+            s_ids           = self.edges_in_subordinates[e_id]
+            n_subordinates_eid    = s_ids.size
     
-            # Retrieve labellings of this edge, assigned by each slave.
+            # Retrieve labellings of this edge, assigned by each subordinate.
             x, y          = self._node_ids_from_edge_id[e_id]
             nl_x, nl_y    = self.n_labels[x], self.n_labels[y]
-            ls_int_       = [(self.slave_list[s].get_node_label(x), self.slave_list[s].get_node_label(y)) for s in s_ids]
+            ls_int_       = [(self.subordinate_list[s].get_node_label(x), self.subordinate_list[s].get_node_label(y)) for s in s_ids]
             ls_           = np.array([make_one_hot(l_int, nl_x, nl_y) for l_int in ls_int_])
             ls_avg_       = np.mean(ls_, axis=0, keepdims=True)
 
             # Check if all labellings for this node agree. 
             if np.max(ls_avg_) == 1:
                 # As all vectors are one-hot, this condition being true implies that 
-                #   all slaves assigned the same label to this node (otherwise, the maximum
+                #   all subordinates assigned the same label to this node (otherwise, the maximum
                 #   number in ls_avg_ would be less than 1).
                 continue    
 
-            # The next step was to iterate over all slaves. We calculate the subgradient here
+            # The next step was to iterate over all subordinates. We calculate the subgradient here
             #   given by 
             #   
             #    \delta_\lambda^s_p = x^s_p - ls_avg_
             #
-            #   for all s. s here signifies slaves. 
+            #   for all s. s here signifies subordinates. 
             # This can be very easily done with array operations!
             _edge_up    = ls_ - ls_avg_
     
-            # Find the edge ID for e_id in each slave in s_ids. 
-            sl_eids = [self.slave_list[s].edge_map[e_id] for s in s_ids]
+            # Find the edge ID for e_id in each subordinate in s_ids. 
+            sl_eids = [self.subordinate_list[s].edge_map[e_id] for s in s_ids]
     
             # Mark this update to be done later. 
-            self._slave_edge_up[s_ids, sl_eids, :nl_x, :nl_y] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
+            self._subordinate_edge_up[s_ids, sl_eids, :nl_x, :nl_y] = _edge_up #:self.n_labels[x]*self.n_labels[y]] = _edge_up
             
             # Add this value to the subgradient. 
             norm_gt += np.sum(_edge_up**2)
-            # Mark this slave for edge updates. 
+            # Mark this subordinate for edge updates. 
             self._mark_sl_up[1, s_ids] = 1
 
         # Return the norm of the subgradient. 
@@ -1911,53 +1911,53 @@ class Graph:
         alpha = self.alpha
 
         # Create a manager to share 
-        #   * self.slave_list
-        #   * self._slave_node_up
-        #   * self._slave_edge_up
+        #   * self.subordinate_list
+        #   * self._subordinate_node_up
+        #   * self._subordinate_edge_up
         #   # self._mark_sl_up
         manager_sl  = multiprocessing.Manager()
 
         # Create objects to handle memory sharing. 
         shared_sl   = manager_sl.list()
-        # Add slaves to shared list. 
-        for i in range(self.n_slaves):
-            shared_sl.append(self.slave_list[i])
+        # Add subordinates to shared list. 
+        for i in range(self.n_subordinates):
+            shared_sl.append(self.subordinate_list[i])
 
-        # Create shared array for self._slave_node_up
-        _sh_sne     = multiprocessing.Array(ctypes.c_float, self.n_slaves*self._max_nodes_in_slave, self.max_n_labels)
+        # Create shared array for self._subordinate_node_up
+        _sh_sne     = multiprocessing.Array(ctypes.c_float, self.n_subordinates*self._max_nodes_in_subordinate, self.max_n_labels)
 
-        # Create shared array for self._slave_edge_up
-        _sh_see     = multiprocessing.Array(ctypes.c_float, self.n_slaves*self._max_nodes_in_slave, self.max_n_labels*self.max_n_labels)
+        # Create shared array for self._subordinate_edge_up
+        _sh_see     = multiprocessing.Array(ctypes.c_float, self.n_subordinates*self._max_nodes_in_subordinate, self.max_n_labels*self.max_n_labels)
 
         # Create shared array for self._mark_sl_up
-        _sh_msl     = multiprocessing.Array(ctypes.c_byte,  2*self.n_slaves)
+        _sh_msl     = multiprocessing.Array(ctypes.c_byte,  2*self.n_subordinates)
 
         # Make numpy arrays and ask them to share memory with these multiprocessing arrays.
 #        _sh_sne_np  = np.frombuffer(_sh_sne.get_obj())
-#        shared_sne  = _sh_sne_np.reshape((self.n_slaves, self._max_nodes_in_slave
-#            iself._slave_node_up = np.zeros((self.n_slaves, self._max_nodes_in_slave, self.max_n_labels), dtype=u_dtype)
+#        shared_sne  = _sh_sne_np.reshape((self.n_subordinates, self._max_nodes_in_subordinate
+#            iself._subordinate_node_up = np.zeros((self.n_subordinates, self._max_nodes_in_subordinate, self.max_n_labels), dtype=u_dtype)
         
 
     def _apply_param_updates(self):
         # Retrieve alpha
         alpha = self.alpha
-        # Perform the marked updates. The slaves to be updates are also the slaves
+        # Perform the marked updates. The subordinates to be updates are also the subordinates
         #   to be solved!
-        for s_id in self._slaves_to_solve:
-            s_max_n_labels     = self.slave_list[s_id].max_n_labels
+        for s_id in self._subordinates_to_solve:
+            s_max_n_labels     = self.subordinate_list[s_id].max_n_labels
             if self._mark_sl_up[0, s_id]:
                 # Node updates have been marked. 
-                n_nodes_this_slave = self.slave_list[s_id].n_nodes
-                self.slave_list[s_id].node_energies += alpha*self._slave_node_up[s_id, :n_nodes_this_slave, 0:s_max_n_labels]
+                n_nodes_this_subordinate = self.subordinate_list[s_id].n_nodes
+                self.subordinate_list[s_id].node_energies += alpha*self._subordinate_node_up[s_id, :n_nodes_this_subordinate, 0:s_max_n_labels]
 
             if self._mark_sl_up[1, s_id]:
                 # Edge updates have been marked. 
-                n_edges_this_slave = self.slave_list[s_id].n_edges
-                self.slave_list[s_id].edge_energies += alpha*self._slave_edge_up[s_id, :n_edges_this_slave, 0:s_max_n_labels, 0:s_max_n_labels]
+                n_edges_this_subordinate = self.subordinate_list[s_id].n_edges
+                self.subordinate_list[s_id].edge_energies += alpha*self._subordinate_edge_up[s_id, :n_edges_this_subordinate, 0:s_max_n_labels, 0:s_max_n_labels]
 
         # Copy the subgradient for the next iteration. 
-        self._prv_node_sg[:] = self._slave_node_up[:]
-        self._prv_edge_sg[:] = self._slave_edge_up[:]
+        self._prv_node_sg[:] = self._subordinate_node_up[:]
+        self._prv_edge_sg[:] = self._subordinate_edge_up[:]
 
 
     def force_naive_search(self, disagreements, response='t'):
@@ -2119,14 +2119,14 @@ class Graph:
 
     def _check_consistency(self):
         '''
-        A function to check convergence of the DD-MRF algorithm by checking if all slaves
+        A function to check convergence of the DD-MRF algorithm by checking if all subordinates
         agree in their labels of the shared nodes. 
         It works by iterating over the list of subproblems over each node to make sure they 
         agree. If a disagreement is found, we do not have consistency
         '''
         for n_id in range(self.n_nodes):
-            s_ids   = self.nodes_in_slaves[n_id]
-            ls_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+            s_ids   = self.nodes_in_subordinates[n_id]
+            ls_     = [self.subordinate_list[s].get_node_label(n_id) for s in s_ids]
             ret_    = reduce(lambda x,y: x and (y == ls_[0]), ls_[1:], True)
             if not ret_:
                 return False
@@ -2141,10 +2141,10 @@ class Graph:
         edge_conflicts = np.zeros(self.n_edges, dtype=bool)
 
         for n_id in range(self.n_nodes):
-            if self._n_slaves_nodes[n_id] == 1:
+            if self._n_subordinates_nodes[n_id] == 1:
                 continue
-            s_ids   = self.nodes_in_slaves[n_id]
-            ls_     = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+            s_ids   = self.nodes_in_subordinates[n_id]
+            ls_     = [self.subordinate_list[s].get_node_label(n_id) for s in s_ids]
             ret_    = map(lambda x: x == ls_[0], ls_[1:])
             if False in ret_:
                 node_conflicts[n_id] = True
@@ -2169,15 +2169,15 @@ class Graph:
         '''
         Assign the final labels to all points. This function must be called if Graph._check_consistency() returns 
         True. This function simply assigns to every node, the label assigned to it by the first
-        slave in its own slave list. Thus, if called without checking consistency first, or even if
+        subordinate in its own subordinate list. Thus, if called without checking consistency first, or even if
         Graph._check_consistency() returned False, it is not guaranteed that this function
         will return the correct labels. 
         Also computes the primal cost for the final labelling. 
         '''
         # Assign labels now. 
 #       for n_id in range(self.n_nodes):
-#           s_id                = self.nodes_in_slaves[n_id][0]
-#           self.labels[n_id]   = self.slave_list[s_id].get_node_label(n_id)
+#           s_id                = self.nodes_in_subordinates[n_id][0]
+#           self.labels[n_id]   = self.subordinate_list[s_id].get_node_label(n_id)
         self.labels      = self._get_primal_solution()
         self.primal_cost = self._compute_primal_cost()
 
@@ -2187,9 +2187,9 @@ class Graph:
     def _compute_dual_cost(self):
         '''
         Returns the dual cost at a given stage of the optimisation. 
-        The dual cost is simply the sum of all energies of the slaves. 
+        The dual cost is simply the sum of all energies of the subordinates. 
         '''
-        return reduce(lambda x, y: x + y, [s._energy for s in self.slave_list], 0)
+        return reduce(lambda x, y: x + y, [s._energy for s in self.subordinate_list], 0)
 
 
     def _get_primal_solution(self):
@@ -2207,8 +2207,8 @@ class Graph:
             # Conflicts are in self._check_nodes. 
             # Assign non-conflicting labels first. 
             for n_id in np.setdiff1d(np.arange(self.n_nodes), self._check_nodes):
-                s_id = self.nodes_in_slaves[n_id][0]
-                labels[n_id] = self.slave_list[s_id].get_node_label(n_id)
+                s_id = self.nodes_in_subordinates[n_id][0]
+                labels[n_id] = self.subordinate_list[s_id].get_node_label(n_id)
 
             # Now traverse conflicting labels.  
             node_order = self._check_nodes
@@ -2226,27 +2226,27 @@ class Graph:
                 node_bel = np.zeros(n_lbl)
                 if len(neighs) == 0:
                 # If there are no previous neighbours, take the maximum of the node belief. 
-                    for s_id in self.nodes_in_slaves[n_id]:
-                        n_id_in_s = self.slave_list[s_id].node_map[n_id]
-                        node_bel += self.slave_list[s_id]._messages_in[n_id_in_s, :n_lbl]
+                    for s_id in self.nodes_in_subordinates[n_id]:
+                        n_id_in_s = self.subordinate_list[s_id].node_map[n_id]
+                        node_bel += self.subordinate_list[s_id]._messages_in[n_id_in_s, :n_lbl]
                     labels[n_id] = np.argmax(node_bel)
                 else:
                 # Else, take the argmax decided by the sum of messages from its neighbours that
                 #   have already appeared in node_order. 
                     for _n in neighs:
                         e_id = self._edge_id_from_node_ids['%d %d' %(_n, n_id)]
-                        for s_id in self.edges_in_slaves[e_id]:
-                            n_edges_in_s = self.slave_list[s_id].graph_struct['n_edges']
-                            _e_id = self.slave_list[s_id].edge_map[e_id]
+                        for s_id in self.edges_in_subordinates[e_id]:
+                            n_edges_in_s = self.subordinate_list[s_id].graph_struct['n_edges']
+                            _e_id = self.subordinate_list[s_id].edge_map[e_id]
                             _e_id += n_edges_in_s if _n > n_id else 0
-                            node_bel += self.slave_list[s_id]._messages[_e_id, :n_lbl]
+                            node_bel += self.subordinate_list[s_id]._messages[_e_id, :n_lbl]
 
                 labels[n_id] = np.argmax(node_bel)
         elif self._primal_strat == 'vote':          # Adding a method to estimate primals based on ergodic sequences. Changed else to elif False. 
             for n_id in range(self.n_nodes):
-                # Retrieve the labels assigned by every slave to this node. 
-                s_ids    = self.nodes_in_slaves[n_id]
-                s_labels = [self.slave_list[s].get_node_label(n_id) for s in s_ids]
+                # Retrieve the labels assigned by every subordinate to this node. 
+                s_ids    = self.nodes_in_subordinates[n_id]
+                s_labels = [self.subordinate_list[s].get_node_label(n_id) for s in s_ids]
                 # Find the most voted label. 
                 labels[n_id] = n_dtype(stats.mode(s_labels)[0][0])
         elif self._primal_strat == 'wsg':
@@ -2324,41 +2324,41 @@ class Graph:
 # ---------------------------------------------------------------------------------------
 
 
-def _compute_node_updates(n_id, s_ids, slave_list, n_labels_nid):
+def _compute_node_updates(n_id, s_ids, subordinate_list, n_labels_nid):
     '''
     A function to handle parallel computation of node updates. 
     The entire graph cannot be passed as a parameter to this function, 
     and so we must create a function that is not a member of the class Graph.
     '''
-    # The number of slaves.
-    n_slaves_nid    = s_ids.size
+    # The number of subordinates.
+    n_subordinates_nid    = s_ids.size
 
-    # If there is only one slave, we have nothing to do. However, to avoid the overhead
+    # If there is only one subordinate, we have nothing to do. However, to avoid the overhead
     #   of calling a function that does nothing, we will simply not call this function
-    #   for those nodes that belong to only one slave. 
+    #   for those nodes that belong to only one subordinate. 
 
-    # Retrieve labels assigned to this point by each slave, and make it into a one-hot vector. 
-    ls_     = np.array([make_one_hot(slave_list[s].get_node_label(n_id), n_labels_nid) for s in range(n_slaves_nid)])
+    # Retrieve labels assigned to this point by each subordinate, and make it into a one-hot vector. 
+    ls_     = np.array([make_one_hot(subordinate_list[s].get_node_label(n_id), n_labels_nid) for s in range(n_subordinates_nid)])
     ls_avg_ = np.mean(ls_, axis=0)
 
     # Check if all labellings for this node agree. 
     if np.max(ls_avg_) == 1:
         # As all vectors are one-hot, this condition being true implies that 
-        #   all slaves assigned the same label to this node (otherwise, the maximum
+        #   all subordinates assigned the same label to this node (otherwise, the maximum
         #   number in ls_avg_ would be less than 1).
         return False, None, None, 0.0
 
-    # The next step was to iterate over all slaves. We calculate the subgradient here
+    # The next step was to iterate over all subordinates. We calculate the subgradient here
     #   given by 
     #   
     #    \delta_\lambda^s_p = x^s_p - ls_avg_
     #
-    #   for all s. s here signifies slaves. 
+    #   for all s. s here signifies subordinates. 
     # This can be very easily done with array operations!
-    _node_up    = ls_ - np.tile(ls_avg_, [n_slaves_nid, 1])
+    _node_up    = ls_ - np.tile(ls_avg_, [n_subordinates_nid, 1])
 
-    # Find the node ID for n_id in each slave in s_ids. 
-    sl_nids = [slave_list[s].node_map[n_id] for s in range(n_slaves_nid)]
+    # Find the node ID for n_id in each subordinate in s_ids. 
+    sl_nids = [subordinate_list[s].node_map[n_id] for s in range(n_subordinates_nid)]
 
     # Add this value to the subgradient. 
     norm_gt = np.sum(_node_up**2)
@@ -2367,55 +2367,55 @@ def _compute_node_updates(n_id, s_ids, slave_list, n_labels_nid):
 # ---------------------------------------------------------------------------------------
 
 
-def _compute_edge_updates(e_id, s_ids, slave_list, pt_coords, n_labels):
+def _compute_edge_updates(e_id, s_ids, subordinate_list, pt_coords, n_labels):
     '''
     A function to handle parallel computation of edge updates. 
     The entire graph cannot be passed as a parameter to this function, 
     and so we must create a function that is not a member of the class Graph.
     '''
-    # The number of slaves that this edge belongs to. 
-    n_slaves_eid    = s_ids.size
+    # The number of subordinates that this edge belongs to. 
+    n_subordinates_eid    = s_ids.size
 
-    # If there is only one slave, we have nothing to do. However, to avoid the overhead
+    # If there is only one subordinate, we have nothing to do. However, to avoid the overhead
     #   of calling a function that does nothing, we will simply not call this function
-    #   for those edges that belong to only one slave. 
+    #   for those edges that belong to only one subordinate. 
 
-    # Retrieve labellings of this edge, assigned by each slave.
+    # Retrieve labellings of this edge, assigned by each subordinate.
     x, y    = pt_coords
     ls_     = np.array([
-                make_one_hot([slave_list[s].get_node_label(x), slave_list[s].get_node_label(y)], n_labels[0], n_labels[1]) 
+                make_one_hot([subordinate_list[s].get_node_label(x), subordinate_list[s].get_node_label(y)], n_labels[0], n_labels[1]) 
                 for s in s_ids])
     ls_avg_ = np.mean(ls_, axis=0)
 
     # Check if all labellings for this node agree. 
     if np.max(ls_avg_) == 1:
         # As all vectors are one-hot, this condition being true implies that 
-        #   all slaves assigned the same label to this node (otherwise, the maximum
+        #   all subordinates assigned the same label to this node (otherwise, the maximum
         #   number in ls_avg_ would be less than 1).
         return False, None, None, 0.0
 
-    # The next step was to iterate over all slaves. We calculate the subgradient here
+    # The next step was to iterate over all subordinates. We calculate the subgradient here
     #   given by 
     #   
     #    \delta_\lambda^s_p = x^s_p - ls_avg_
     #
-    #   for all s. s here signifies slaves. 
+    #   for all s. s here signifies subordinates. 
     # This can be very easily done with array operations!
-    _edge_up    = ls_ - np.tile(ls_avg_, [n_slaves_eid, 1])
+    _edge_up    = ls_ - np.tile(ls_avg_, [n_subordinates_eid, 1])
 
-    # Find the node ID for n_id in each slave in s_ids. 
-    sl_eids = [slave_list[s].edge_map[e_id] for s in range(s_ids)]
+    # Find the node ID for n_id in each subordinate in s_ids. 
+    sl_eids = [subordinate_list[s].edge_map[e_id] for s in range(s_ids)]
 
     # Add this value to the subgradient. 
     norm_gt = np.sum(_edge_up**2)
 
-    # Mark this slave for edge updates, and return.
+    # Mark this subordinate for edge updates, and return.
     return True, _edge_up, sl_eids, norm_gt
 
     
-def _compute_4node_slave_energy(node_energies, edge_energies, labels):
+def _compute_4node_subordinate_energy(node_energies, edge_energies, labels):
     '''
-    Compute the energy of a slave corresponding to the labels. 
+    Compute the energy of a subordinate corresponding to the labels. 
     '''
     [i,j,k,l]   = labels
     
@@ -2431,9 +2431,9 @@ def _compute_4node_slave_energy(node_energies, edge_energies, labels):
 # ---------------------------------------------------------------------------------------
 
 
-def _compute_tree_slave_energy(node_energies, edge_energies, labels, graph_struct):
+def _compute_tree_subordinate_energy(node_energies, edge_energies, labels, graph_struct):
     ''' 
-    Compute the energy corresponding to a given labelling for a tree slave. 
+    Compute the energy corresponding to a given labelling for a tree subordinate. 
     The edges are specified in graph_struct. 
     '''
     
@@ -2448,7 +2448,7 @@ def _compute_tree_slave_energy(node_energies, edge_energies, labels, graph_struc
 # ---------------------------------------------------------------------------------------
 
 
-def _compute_cycle_slave_energy(node_energies, edge_energies, labels, node_list):
+def _compute_cycle_subordinate_energy(node_energies, edge_energies, labels, node_list):
     '''
     Compute the energy of a cycle. It is assumed that the edges are ordered as 
         x1 - x2
@@ -2475,9 +2475,9 @@ def _compute_cycle_slave_energy(node_energies, edge_energies, labels, node_list)
 # ---------------------------------------------------------------------------------------
     
 
-def _optimise_4node_slave(slave):
+def _optimise_4node_subordinate(subordinate):
     '''
-    Optimise the smallest possible slave consisting of four vertices. 
+    Optimise the smallest possible subordinate consisting of four vertices. 
     This is a brute force optimisation done by enumerating all possible
     states of the four points and finding the minimum energy. 
     The nodes are arranged as 
@@ -2490,7 +2490,7 @@ def _optimise_4node_slave(slave):
     where these indices are the same as their indices in node_energies. 
 
     Input:
-        An instance of class Slave which has the following members:
+        An instance of class Subordinate which has the following members:
             node_energies:      The node energies for every label,
                                 in shape (4, max_n_labels)
             n_labels:           The number of labels for each node. 
@@ -2505,13 +2505,13 @@ def _optimise_4node_slave(slave):
         min_energy:         The total energy corresponding to the labelling. 
     '''
 
-    # Extract parameters from the slave. 
-    node_energies       = slave.node_energies
-    n_labels            = slave.n_labels
-    edge_energies       = slave.edge_energies
+    # Extract parameters from the subordinate. 
+    node_energies       = subordinate.node_energies
+    n_labels            = subordinate.n_labels
+    edge_energies       = subordinate.edge_energies
 
     # Use already generated all labellings. 
-    all_labellings      = slave.all_labellings
+    all_labellings      = subordinate.all_labellings
     
     # Minimum energy. We set the minimum energy to four times the maximum node energy plus
     #   four times the maximum edge energy. 
@@ -2522,7 +2522,7 @@ def _optimise_4node_slave(slave):
 
     # Record energies for every labelling. 
     for l_ in range(all_labellings.shape[0]):
-        total_e     = _compute_4node_slave_energy(node_energies, edge_energies, all_labellings[l_,:])
+        total_e     = _compute_4node_subordinate_energy(node_energies, edge_energies, all_labellings[l_,:])
         # Check if best. 
         if total_e < min_energy:
             min_energy  = total_e
@@ -2532,49 +2532,49 @@ def _optimise_4node_slave(slave):
 # ---------------------------------------------------------------------------------------
 
 
-def _optimise_tree(slave):
+def _optimise_tree(subordinate):
     ''' 
-    Optimise a tree-structured slave. We use max-product belief propagation for this optimisation. 
+    Optimise a tree-structured subordinate. We use max-product belief propagation for this optimisation. 
     The package bp provides a function max_prod_bp, which optimises a given tree based on supplied
     node and edge potentials. However, this function maximises the total potential on a tree. To 
     use it to minimise our energy, we apply exp(-x) on all node and edge energies before passing
     it to max_prod_bp
     '''
-    node_pot    = np.array([np.exp(-1*ne) for ne in slave.node_energies])
-    edge_pot    = np.array([np.exp(-1*ee) for ee in slave.edge_energies])
-    gs          = slave.graph_struct
+    node_pot    = np.array([np.exp(-1*ne) for ne in subordinate.node_energies])
+    edge_pot    = np.array([np.exp(-1*ee) for ee in subordinate.edge_energies])
+    gs          = subordinate.graph_struct
     # Call bp.max_prod_bp
     labels, messages, messages_in = bp.max_prod_bp(node_pot, edge_pot, gs)
     # We return the energy. 
-    energy = _compute_tree_slave_energy(slave.node_energies, slave.edge_energies, labels, slave.graph_struct)
+    energy = _compute_tree_subordinate_energy(subordinate.node_energies, subordinate.edge_energies, labels, subordinate.graph_struct)
     return labels, energy, messages, messages_in
 # ---------------------------------------------------------------------------------------
 
-def _optimise_cycle2(slave):
+def _optimise_cycle2(subordinate):
     ''' Proxy: optimise four node cycle '''
-    all_labellings = _generate_label_permutations(slave.n_labels)
+    all_labellings = _generate_label_permutations(subordinate.n_labels)
     min_energy = np.inf
     min_labels = []
 
     # Minimum energy. We set the minimum energy to four times the maximum node energy plus
     #   four times the maximum edge energy. 
-    min_energy      = 4*np.max(slave.node_energies) + 4*np.max(slave.edge_energies)
+    min_energy      = 4*np.max(subordinate.node_energies) + 4*np.max(subordinate.edge_energies)
 
     for l_ in all_labellings:
         i, j, k, l = l_
-        energy  = slave.node_energies[0][i] + slave.node_energies[1][j] + \
-                  slave.node_energies[2][k] + slave.node_energies[3][l]
+        energy  = subordinate.node_energies[0][i] + subordinate.node_energies[1][j] + \
+                  subordinate.node_energies[2][k] + subordinate.node_energies[3][l]
 
-        node_list = slave.node_list
-        for i in range(slave.n_edges):
+        node_list = subordinate.node_list
+        for i in range(subordinate.n_edges):
             n0, n1 = node_list[i], node_list[(i+1)%4]
             l0, l1 = l_[i], l_[(i+1)%4]
             if n0 < n1:
-                energy += slave.edge_energies[i, l0, l1]
+                energy += subordinate.edge_energies[i, l0, l1]
             else:
-                energy += slave.edge_energies[i, l1, l0]
-#energy += slave.edge_energies[0, i, j] + slave.edge_energies[1, j, k] + \
-#                 slave.edge_energies[2, k, l] + slave.edge_energies[3, l, i]
+                energy += subordinate.edge_energies[i, l1, l0]
+#energy += subordinate.edge_energies[0, i, j] + subordinate.edge_energies[1, j, k] + \
+#                 subordinate.edge_energies[2, k, l] + subordinate.edge_energies[3, l, i]
 
         if energy < min_energy:
             min_energy = energy
@@ -2582,34 +2582,34 @@ def _optimise_cycle2(slave):
     
     return min_labels, min_energy
 
-def _optimise_cycle(slave):
+def _optimise_cycle(subordinate):
     '''
-    Optimise a cycle-slave. We use the fast cycle solver of Wang and Koller (ICML 2013).
+    Optimise a cycle-subordinate. We use the fast cycle solver of Wang and Koller (ICML 2013).
     At the core, the code is the one released by Wang. However, a Python-wrapped
     version of that code is used here. 
     '''
 
     # Node energies must be an (N, max_n_labels) Numpy np.float32 array. 
-    node_energies    = np.zeros_like(slave.node_energies)
-    node_energies[:] = slave.node_energies[:]
+    node_energies    = np.zeros_like(subordinate.node_energies)
+    node_energies[:] = subordinate.node_energies[:]
     # Edge energies must be an (n, max_n_labels*max_n_labels) Numpy np.float32 array. 
     # It thus needs to be reshaped here. 
-    edge_energies = np.zeros((slave.edge_energies.shape[0], slave.max_n_labels*slave.max_n_labels))
-    for n in range(slave.n_nodes):
-        e0, e1                       = n, (n+1)%slave.n_nodes
-        nl_e0                        = slave.n_labels[e0]
-        nl_e1                        = slave.n_labels[e1]
+    edge_energies = np.zeros((subordinate.edge_energies.shape[0], subordinate.max_n_labels*subordinate.max_n_labels))
+    for n in range(subordinate.n_nodes):
+        e0, e1                       = n, (n+1)%subordinate.n_nodes
+        nl_e0                        = subordinate.n_labels[e0]
+        nl_e1                        = subordinate.n_labels[e1]
         numel_pw                     = nl_e0*nl_e1
-        if slave.node_list[e0] < slave.node_list[e1]:
-            slave_edge_energies      = slave.edge_energies[n, :nl_e0, :nl_e1]
+        if subordinate.node_list[e0] < subordinate.node_list[e1]:
+            subordinate_edge_energies      = subordinate.edge_energies[n, :nl_e0, :nl_e1]
         else:
-            slave_edge_energies      = np.transpose(slave.edge_energies[n, :nl_e1, :nl_e0])
+            subordinate_edge_energies      = np.transpose(subordinate.edge_energies[n, :nl_e1, :nl_e0])
 
         # [0, 1, 0] needed in np.reshape because Wang's code assumes column-first ordering!
-        edge_energies[n, 0:numel_pw] = np.reshape(slave_edge_energies, (numel_pw,), [0, 1, 0])      
+        edge_energies[n, 0:numel_pw] = np.reshape(subordinate_edge_energies, (numel_pw,), [0, 1, 0])      
     # The list of the number of labels. 
-    n_labels      = np.zeros_like(slave.n_labels).astype(np.int)        # Again, the Python wrapper requires np.int!
-    n_labels[:]   = slave.n_labels[:]
+    n_labels      = np.zeros_like(subordinate.n_labels).astype(np.int)        # Again, the Python wrapper requires np.int!
+    n_labels[:]   = subordinate.n_labels[:]
 
     # Adjust energies so that the least energy is zero. 
     n_min = np.min(node_energies)
@@ -2621,17 +2621,17 @@ def _optimise_cycle(slave):
     # Solve the cycle. 
     labels        = fsc.solver(node_energies, edge_energies, n_labels)
     # Compute energy of labelling. 
-    energy        = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, labels, slave.node_list)
+    energy        = _compute_cycle_subordinate_energy(subordinate.node_energies, subordinate.edge_energies, labels, subordinate.node_list)
     # Return the labelling and the energy.
     return labels, energy
 
 #   # Brute force solver here. 
-#   all_labellings = slave.all_labellings
+#   all_labellings = subordinate.all_labellings
 #   min_energy     = 1e10
 #   min_labels     = []
 #   for i in range(len(all_labellings)):
 #       cur_labels = all_labellings[i]
-#       cur_energy = _compute_cycle_slave_energy(slave.node_energies, slave.edge_energies, cur_labels, slave.node_list)
+#       cur_energy = _compute_cycle_subordinate_energy(subordinate.node_energies, subordinate.edge_energies, cur_labels, subordinate.node_list)
 #       if cur_energy < min_energy:
 #           min_energy = cur_energy
 #           min_labels = cur_labels
@@ -2640,11 +2640,11 @@ def _optimise_cycle(slave):
 # ---------------------------------------------------------------------------------------
 
 
-def _update_slave_states(c):
+def _update_subordinate_states(c):
     '''
-    Update the states for slave (given by c[1]) and set its labelling to the specified one
+    Update the states for subordinate (given by c[1]) and set its labelling to the specified one
     (given by c[2][0]). Also performs a sanity check on c[1]._compute_energy and c[2][1], which
-    is the optimal energy returned by _optimise_4node_slave().
+    is the optimal energy returned by _optimise_4node_subordinate().
     '''
     i                   = c[0]
     s                   = c[1]
@@ -2656,9 +2656,9 @@ def _update_slave_states(c):
 
     # Sanity check. The two energies (s_min and s._energy) must agree.
     if s._energy != s_min:
-        print '_update_slave_states(): Consistency error. The minimum energy returned \
-by _optimise_4node_slave() for slave %d is %g and does not match the one computed \
-by Slave._compute_energy(), which is %g. The labels are [%d, %d, %d, %d]' \
+        print '_update_subordinate_states(): Consistency error. The minimum energy returned \
+by _optimise_4node_subordinate() for subordinate %d is %g and does not match the one computed \
+by Subordinate._compute_energy(), which is %g. The labels are [%d, %d, %d, %d]' \
                 %(i, s_min, s._energy, s_labels[0], s_labels[1], s_labels[2], s_labels[3])
         return False, None
 
@@ -2666,42 +2666,42 @@ by Slave._compute_energy(), which is %g. The labels are [%d, %d, %d, %d]' \
     return True, s
 
 # ---------------------------------------------------------------------------------------
-# Use shared list shared_slave_list to optimise slaves. 
-def _optimise_slave_mp(i):
-    s   = shared_slave_list[i]
-    ret = _optimise_slave(s)
+# Use shared list shared_subordinate_list to optimise subordinates. 
+def _optimise_subordinate_mp(i):
+    s   = shared_subordinate_list[i]
+    ret = _optimise_subordinate(s)
     return ret
 
 # ---------------------------------------------------------------------------------------
 
 
-def optimise_all_slaves(slaves):
+def optimise_all_subordinates(subordinates):
     '''
-    A function to optimise all slaves. This function distributes the job of
-    optimising every slave to all but one cores on the machine. 
+    A function to optimise all subordinates. This function distributes the job of
+    optimising every subordinate to all but one cores on the machine. 
     Inputs:
-        slaves:     A list of objects of type Slave. 
+        subordinates:     A list of objects of type Subordinate. 
     '''
     # The number of cores to use is the number of cores on the machine minum 1. 
     n_cores     = cpu_count() - 1
-    optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_4node_slave)(s) for s in slaves)
+    optima      = Parallel(n_jobs=n_cores)(delayed(_optimise_4node_subordinate)(s) for s in subordinates)
 
-    # Update the labelling in slaves. 
-    success     = np.array(Parallel(n_jobs=n_cores)(delayed(_update_slave_states)(c) for c in zip(range(len(slaves)), slaves, optima)))
+    # Update the labelling in subordinates. 
+    success     = np.array(Parallel(n_jobs=n_cores)(delayed(_update_subordinate_states)(c) for c in zip(range(len(subordinates)), subordinates, optima)))
     if False in success:
-        print 'Update of slave states failed for ',
+        print 'Update of subordinate states failed for ',
         print np.where(success == False)[0]
         raise AssertionError
 
 # ---------------------------------------------------------------------------------------
 
 
-def _optimise_slave(s):
+def _optimise_subordinate(s):
     '''
-    Function to handle optimisation of any random slave. 
+    Function to handle optimisation of any random subordinate. 
     '''
     if s.struct == 'cell':
-        return _optimise_4node_slave(s)
+        return _optimise_4node_subordinate(s)
     elif s.struct == 'tree':
         return _optimise_tree(s)
     elif s.struct == 'cycle':
@@ -2726,7 +2726,7 @@ def _optimise_slave(s):
         # Return the minimum energy. 
         return min_labels, min_energy
     else:
-        print 'Slave structure not recognised: %s.' %(s.struct)
+        print 'Subordinate structure not recognised: %s.' %(s.struct)
         raise ValueError
 # ---------------------------------------------------------------------------------------
 
